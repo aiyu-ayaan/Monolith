@@ -375,6 +375,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "monolith-rules"
+version = "0.0.0"
+dependencies = [
+ "criterion",
+ "monolith-store",
+ "rusqlite",
+ "thiserror",
+]
+
+[[package]]
 name = "monolith-store"
 version = "0.0.0"
 dependencies = [

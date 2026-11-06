@@ -1,0 +1,22 @@
+[package]
+name = "monolith-rules"
+description = "Rules and filter language: parser, type checker, SQL and in-memory predicate compilers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+monolith-store.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rusqlite.workspace = true
+criterion.workspace = true
+
+[lints]
+workspace = true
+
+[[bench]]
+name = "rules"
+harness = false

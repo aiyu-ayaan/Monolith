@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/monolith-store", "bench/harness"]
+members = ["crates/monolith-store", "crates/monolith-rules", "bench/harness"]
 
 [workspace.package]
 version = "0.0.0"
@@ -10,6 +10,7 @@ publish = false
 
 [workspace.dependencies]
 monolith-store = { path = "crates/monolith-store" }
+monolith-rules = { path = "crates/monolith-rules" }
 rusqlite = { version = "0.41", features = ["bundled"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 crossbeam-channel = "0.5"
