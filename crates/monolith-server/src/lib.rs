@@ -218,6 +218,7 @@ pub fn router(reg: Arc<Registry>) -> Router {
             get(|| async { axum::Json(json!({"status": "ok"})) }),
         )
         .route("/api/v1/system/auth/login", post(login))
+        .route("/api/v1/system/install", get(install_status).post(install))
         .route("/api/v1/system/superusers", post(create_superuser))
         .route("/api/v1/system/apps", get(list_apps).post(create_app))
         .route("/api/v1/system/apps/{app}", get(get_app).delete(delete_app))
@@ -271,6 +272,26 @@ async fn login(State(reg): St, body: Result<Bytes, BytesRejection>) -> ApiResult
     let c: Credentials = parse_json(body)?;
     let (token, exp) = reg.login(&c.email, &c.password).await?;
     Ok(axum::Json(json!({"token": token, "expires": format_us(exp)})).into_response())
+}
+
+async fn install_status(State(reg): St) -> ApiResult<Response> {
+    let required = reg.install_required().await?;
+    Ok(axum::Json(json!({"required": required})).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Install {
+    token: String,
+    email: String,
+    password: String,
+}
+
+async fn install(State(reg): St, body: Result<Bytes, BytesRejection>) -> ApiResult<Response> {
+    let i: Install = parse_json(body)?;
+    let (token, exp) = reg.install(&i.token, &i.email, &i.password).await?;
+    let out = json!({"token": token, "expires": format_us(exp)});
+    Ok((StatusCode::CREATED, axum::Json(out)).into_response())
 }
 
 async fn create_superuser(

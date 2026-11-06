@@ -60,6 +60,53 @@ paths:
                   expires: { type: string, format: date-time }
         "401": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/system/install:
+    get:
+      operationId: installStatus
+      security: []
+      description: Whether the server still needs its first superuser.
+      responses:
+        "200":
+          description: Install state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [required]
+                properties:
+                  required: { type: boolean }
+    post:
+      operationId: install
+      security: []
+      description: >
+        Creates the first superuser. Needs the one-time installer token the server prints
+        on start-up while no superuser exists (memory only, expires after 1 h, consumed on
+        success). Any token is rejected once a superuser exists.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, email, password]
+              properties:
+                token: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 10 }
+      responses:
+        "201":
+          description: Superuser created; signed superuser token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, expires]
+                properties:
+                  token: { type: string }
+                  expires: { type: string, format: date-time }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+
   /api/v1/system/superusers:
     post:
       operationId: createSuperuser

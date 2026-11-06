@@ -51,7 +51,8 @@ pub struct Claims {
     pub exp_us: i64,
 }
 
-fn hex(b: &[u8]) -> String {
+/// Lowercase hex.
+pub fn hex(b: &[u8]) -> String {
     const H: &[u8; 16] = b"0123456789abcdef";
     b.iter()
         .flat_map(|x| [H[(x >> 4) as usize] as char, H[(x & 15) as usize] as char])

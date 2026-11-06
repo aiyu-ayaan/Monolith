@@ -112,8 +112,8 @@ pnpm rust:fmt                         # format
 pnpm rust:bench:build                 # compile benches only
 pnpm rust:bench                       # run benches (ask the owner before running on the host)
 pnpm rust:deny                        # cargo-deny (needs `cargo install cargo-deny`)
-pnpm server:dev                       # run the server (env: MONOLITH_DATA, MONOLITH_ADDR,
-                                      # MONOLITH_ADMIN_EMAIL/PASSWORD for the first superuser)
+pnpm server:dev                       # run the server (env: MONOLITH_DATA, MONOLITH_ADDR);
+                                      # first start prints a one-time superuser setup link
 ```
 
 ## Reference material

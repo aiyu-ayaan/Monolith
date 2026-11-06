@@ -32,6 +32,10 @@ Check this list before relying on a feature; the rest of this page is the target
   `GET /api/v1/apps/{app}/logs/slow`.
 - Auth: only superuser tokens from `POST /api/v1/system/auth/login`. Without a token you are
   anonymous and the collection rules decide. A bad token is 401, never anonymous.
+- First superuser: `GET /api/v1/system/install` → `{"required": true}` on a fresh server.
+  Create it with `POST /api/v1/system/install` `{token, email, password}`; the token is the
+  64-hex string in the setup link the server prints at start-up (ask the operator for it;
+  restart for a new one). 401 = wrong/expired/spent token or a superuser already exists.
 - Not yet: user tokens, API keys, `openapi.json`, 429 rate limits.
 - Status codes: create rule rejects → 403; update/delete rule rejects or record missing → 404;
   rule `null` → 403 for non-superusers; unique/FK violation → 409; stale `If-Match` → 412;

@@ -351,6 +351,53 @@ async fn edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn first_superuser_installer() {
+    let dir = tempfile::tempdir().unwrap();
+    let reg = Arc::new(Registry::open(dir.path()).await.unwrap());
+    let mut t = T {
+        app: monolith_server::router(reg.clone()),
+        token: String::new(),
+        _dir: dir,
+    };
+    let install = "/api/v1/system/install";
+    let r = t.call(Method::GET, install, None, false).await;
+    assert_eq!(r.body, json!({"required": true}));
+    let creds = |tok: &str| json!({"token": tok, "email": "Root@Example.com", "password": "a long password"});
+
+    // No token issued yet: nothing can install.
+    let r = t.call(Method::POST, install, Some(creds("x")), false).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+
+    let tok = reg.issue_install_token().await.unwrap().unwrap();
+    assert_eq!(tok.len(), 64);
+    let r = t
+        .call(Method::POST, install, Some(creds(&tok[..63])), false)
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    // A validation error keeps the token usable.
+    let short = json!({"token": tok, "email": "root@example.com", "password": "short"});
+    let r = t.call(Method::POST, install, Some(short), false).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    let r = t
+        .call(Method::POST, install, Some(creds(&tok)), false)
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    t.token = r.body["token"].as_str().unwrap().to_owned();
+    let r = t.call(Method::GET, "/api/v1/system/apps", None, true).await;
+    assert_eq!(r.status, StatusCode::OK);
+
+    // One-time: the token is spent and no new one is issued once a superuser exists.
+    let r = t
+        .call(Method::POST, install, Some(creds(&tok)), false)
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(reg.issue_install_token().await.unwrap(), None);
+    let r = t.call(Method::GET, install, None, false).await;
+    assert_eq!(r.body, json!({"required": false}));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn admin_ui_route() {
     let t = T::new().await;
     let res = t

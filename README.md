@@ -161,9 +161,7 @@ All JavaScript/TypeScript and Rust commands run through root `pnpm` scripts:
 ```bash
 pnpm setup                  # install JS/TS workspace dependencies (ui, sdks/typescript, examples)
 
-# Start the Rust server on http://0.0.0.0:8090 with an initial superuser
-MONOLITH_ADMIN_EMAIL=admin@example.com \
-MONOLITH_ADMIN_PASSWORD=correct-horse-battery \
+# Start the Rust server on http://0.0.0.0:8090
 pnpm server:dev
 
 # In another terminal, run the SolidJS admin UI dev server (proxies /api to :8090)
@@ -179,10 +177,23 @@ pnpm build:ui               # builds ui/dist (embedded into monolith-server via 
 pnpm rust:release           # cargo build --release --workspace (LTO=fat, codegen-units=1)
 MONOLITH_DATA=/var/lib/monolith \
 MONOLITH_ADDR=0.0.0.0:8090 \
-MONOLITH_ADMIN_EMAIL=admin@example.com \
-MONOLITH_ADMIN_PASSWORD=change-me-immediately \
 pnpm server:release
 ```
+
+### First superuser
+
+Credentials never go through env vars or config files. While no superuser exists,
+start-up prints a one-time setup link (like PocketBase's installer):
+
+```
+  No superuser yet. Open this one-time link within 1 hour to create one:
+
+  http://127.0.0.1:8090/_/#/install/<64 hex chars>
+```
+
+The token lives only in server memory, expires after 1 hour, and is spent once the
+superuser is created. Restart the server for a fresh link. In Docker, read it with
+`docker logs <container>`.
 
 On first start Monolith initializes `MONOLITH_DATA` (default `./monolith_data`) with:
 
@@ -198,8 +209,6 @@ Environment variables configured on `monolith-server`:
 |---|---|---|
 | `MONOLITH_DATA` | `./monolith_data` | Data directory holding `system.db` and `apps/<app>/data.db` |
 | `MONOLITH_ADDR` | `0.0.0.0:8090` | HTTP listen address (`host:port`) |
-| `MONOLITH_ADMIN_EMAIL` | *(unset)* | Creates the first superuser on boot when `superusers` is empty |
-| `MONOLITH_ADMIN_PASSWORD` | *(unset)* | Password for the initial superuser (Argon2id hashed) |
 | `MONOLITH_LOG` | `info` | `tracing_subscriber` env filter (e.g. `info,monolith_core=debug`) |
 
 ## REST API & debugging quick-start

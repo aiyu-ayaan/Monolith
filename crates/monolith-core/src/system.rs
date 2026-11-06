@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use monolith_auth::{
-    Claims, hash_password, random_bytes, sign_token, verify_password, verify_token,
+    Claims, hash_password, hex, random_bytes, sign_token, verify_password, verify_token,
 };
 use monolith_store::id::new_id;
 use monolith_store::{
@@ -19,6 +19,8 @@ use crate::schema::valid_name;
 
 pub const SUPERUSER_TOKEN_TTL_US: i64 = 3600 * 1_000_000;
 pub const MIN_PASSWORD: usize = 10;
+/// Lifetime of the one-time installer token; a restart issues a fresh one.
+pub const INSTALL_TOKEN_TTL_US: i64 = 3600 * 1_000_000;
 
 const SYSTEM_DDL: &str = "
 CREATE TABLE IF NOT EXISTS apps (name TEXT PRIMARY KEY, created INTEGER NOT NULL) STRICT;
@@ -42,6 +44,12 @@ pub struct Registry {
     token_key: Vec<u8>,
     /// Verified against when the email is unknown, so timing does not reveal accounts.
     dummy_hash: String,
+    /// One-time installer token `(token, expires µs)`, memory only (doc 18 §2).
+    install: tokio::sync::Mutex<Option<(String, i64)>>,
+}
+
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn blocking_err(e: tokio::task::JoinError) -> CoreError {
@@ -116,6 +124,7 @@ impl Registry {
             open_lock: tokio::sync::Mutex::new(()),
             token_key: token_key.to_vec(),
             dummy_hash,
+            install: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -318,6 +327,45 @@ impl Registry {
                 e => e.into(),
             })?;
         Ok(id)
+    }
+
+    /// Issues the one-time installer token when no superuser exists (PocketBase-style
+    /// setup URL). It lives in memory only and is printed to the server log, so only
+    /// someone with console or log access can create the first superuser.
+    pub async fn issue_install_token(&self) -> CoreResult<Option<String>> {
+        let mut slot = self.install.lock().await;
+        if self.superuser_count().await? > 0 {
+            *slot = None;
+            return Ok(None);
+        }
+        let t = hex(&random_bytes::<32>().map_err(|e| CoreError::Internal(e.to_string()))?);
+        *slot = Some((t.clone(), now_us() + INSTALL_TOKEN_TTL_US));
+        Ok(Some(t))
+    }
+
+    /// True while no superuser exists.
+    pub async fn install_required(&self) -> CoreResult<bool> {
+        Ok(self.superuser_count().await? == 0)
+    }
+
+    /// Creates the first superuser with the installer token and signs them in.
+    /// The token is consumed on success; any token is rejected once a superuser exists.
+    pub async fn install(
+        &self,
+        token: &str,
+        email: &str,
+        password: &str,
+    ) -> CoreResult<(String, i64)> {
+        let mut slot = self.install.lock().await;
+        let valid = matches!(&*slot, Some((t, exp))
+            if now_us() < *exp && ct_eq(t.as_bytes(), token.as_bytes()));
+        if !valid || self.superuser_count().await? > 0 {
+            return Err(CoreError::Unauthorized);
+        }
+        let sub = self.create_superuser(email, password).await?;
+        *slot = None;
+        let exp_us = now_us() + SUPERUSER_TOKEN_TTL_US;
+        Ok((sign_token(&self.token_key, Claims { sub, exp_us }), exp_us))
     }
 
     /// Returns `(token, expires µs)`; wrong email and wrong password look the same.
