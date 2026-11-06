@@ -71,7 +71,7 @@ impl SchemaView for Schema {
                 kind: FieldKind::Scalar(if name == "id" { Ty::Id } else { Ty::Text }),
                 hidden: false,
             }),
-            "tags" => (name == "id" || name == "label" || name == "weight").then(|| FieldInfo {
+            "tags" => (name == "id" || name == "label" || name == "weight").then_some(FieldInfo {
                 slot: 0,
                 kind: FieldKind::Scalar(match name {
                     "id" => Ty::Id,

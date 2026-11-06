@@ -71,6 +71,7 @@ fn sys_write(sql: &str, rid: Id, params: Vec<Value>) -> WriteOp {
             params,
             seq_slot: None,
             hlc_slot: None,
+            post_sql: Vec::new(),
         }],
     }
 }
@@ -261,6 +262,7 @@ impl Registry {
                     params: vec![Value::Text(name.into())],
                     seq_slot: None,
                     hlc_slot: None,
+                    post_sql: Vec::new(),
                 }],
             })
             .await?;

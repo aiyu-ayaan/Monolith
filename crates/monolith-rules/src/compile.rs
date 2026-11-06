@@ -598,10 +598,7 @@ fn emit(n: &Node, params: &[Param], order: &mut Vec<usize>, out: &mut String) {
             if bare_junction_null {
                 // `tags = null` / `tags = ''` (or `?!=`) tests whether the multi-relation is empty;
                 // `tags != null` / `tags != ''` (or `?=`) tests whether it is non-empty.
-                let want_empty = match (op, *any) {
-                    (CmpOp::Eq, false) | (CmpOp::Ne, true) => true,
-                    _ => false,
-                };
+                let want_empty = matches!((op, *any), (CmpOp::Eq, false) | (CmpOp::Ne, true));
                 if want_empty {
                     out.push_str("NOT ");
                 }

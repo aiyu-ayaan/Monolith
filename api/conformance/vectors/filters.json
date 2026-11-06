@@ -9,6 +9,7 @@
       { "name": "done", "type": "bool" },
       { "name": "due", "type": "date" },
       { "name": "owner", "type": "relation", "collection": "users" },
+      { "name": "watchers", "type": "relation", "collection": "users", "maxSelect": 5 },
       { "name": "note", "type": "text", "hidden": true }
     ]
   },
@@ -19,6 +20,7 @@
     "title:lower ~ 'airport' || done = true",
     "due > '2026-01-01' && due <= @now",
     "owner = null || owner != ''",
+    "watchers ?= '00000000000000000000000000' || watchers = null",
     "(priority > 1 || priority < -1) && title !~ '%'"
   ],
   "invalid": [
@@ -29,6 +31,7 @@
     "due = 'yesterday'",
     "missing = 1",
     "note = 'x'",
-    "tags ?= 'x'"
+    "tags ?= 'x'",
+    "status ?= 'open'"
   ]
 }

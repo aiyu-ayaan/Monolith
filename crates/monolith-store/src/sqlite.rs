@@ -624,6 +624,11 @@ impl Writer {
             if self.conn.changes() == 0 {
                 return Err(Error::NotFound);
             }
+            for (aux_sql, aux_params) in &m.post_sql {
+                self.conn
+                    .prepare_cached(aux_sql)?
+                    .execute(params_from_iter(aux_params.iter()))?;
+            }
             self.next_seq += 1;
             self.hlc = hlc;
             self.conn.prepare_cached(INSERT_CHANGE)?.execute((

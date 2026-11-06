@@ -63,6 +63,8 @@ pub struct FieldDef {
     pub collection: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_delete: Option<OnDelete>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_select: Option<u32>,
 }
 
 impl FieldDef {
@@ -76,6 +78,14 @@ impl FieldDef {
             FieldType::Relation => Ty::Id,
             FieldType::Json => return None,
         })
+    }
+
+    pub fn is_multi_rel(&self) -> bool {
+        self.kind == FieldType::Relation && self.max_select.unwrap_or(1) > 1
+    }
+
+    pub fn junction_table(&self, owner_coll: &str) -> String {
+        format!("_rel_{owner_coll}_{}", self.name)
     }
 
     pub fn sql_type(&self) -> &'static str {
@@ -190,16 +200,22 @@ pub fn validate_def(def: &CollectionDef) -> CoreResult<()> {
             )));
         }
         if is(FieldType::Relation) != f.collection.is_some()
-            || (f.on_delete.is_some() && !is(FieldType::Relation))
+            || ((f.on_delete.is_some() || f.max_select.is_some()) && !is(FieldType::Relation))
         {
             return Err(bad(format!(
-                "{}: collection/onDelete apply to relation fields only",
+                "{}: collection/onDelete/maxSelect apply to relation fields only",
                 f.name
             )));
         }
-        if f.on_delete == Some(OnDelete::SetNull) && f.required {
+        if f.max_select == Some(0) || f.max_select.is_some_and(|m| m > 1000) {
             return Err(bad(format!(
-                "{}: onDelete setNull conflicts with required",
+                "{}: maxSelect must be within 1..=1000",
+                f.name
+            )));
+        }
+        if f.on_delete == Some(OnDelete::SetNull) && (f.required || f.is_multi_rel()) {
+            return Err(bad(format!(
+                "{}: onDelete setNull conflicts with required or multi-relation fields",
                 f.name
             )));
         }
@@ -214,8 +230,16 @@ pub fn validate_def(def: &CollectionDef) -> CoreResult<()> {
             return Err(bad("index needs at least one field"));
         }
         for name in &ix.fields {
-            if !SYSTEM.contains(&name.as_str()) && def.field(name).is_none() {
-                return Err(bad(format!("index field '{name}' does not exist")));
+            if !SYSTEM.contains(&name.as_str()) {
+                match def.field(name) {
+                    None => return Err(bad(format!("index field '{name}' does not exist"))),
+                    Some(f) if f.is_multi_rel() => {
+                        return Err(bad(format!(
+                            "multi-relation field '{name}' is already indexed by its junction table"
+                        )));
+                    }
+                    Some(_) => {}
+                }
             }
         }
     }
@@ -256,6 +280,9 @@ pub struct Collection {
     pub sql: Templates,
     /// `"name":` per slot, JSON-escaped once.
     pub json_keys: Vec<String>,
+    /// Indices into `def.fields` for multi-relation fields (`max_select > 1`), with
+    /// `(field_idx, slot, delete_sql, insert_sql)`.
+    pub multi_rels: Vec<(usize, usize, Arc<str>, Arc<str>)>,
     by_name: HashMap<String, usize>,
 }
 
@@ -307,6 +334,7 @@ fn field_info(def: &CollectionDef, name: &str) -> Option<FieldInfo> {
     let kind = match (&f.collection, f.ty()?) {
         (Some(target), _) => FieldKind::Relation {
             target: target.clone(),
+            multi: f.is_multi_rel(),
         },
         (None, ty) => FieldKind::Scalar(ty),
     };
@@ -383,6 +411,21 @@ impl Schema {
                     String::from_utf8(k).expect("escaped JSON is UTF-8")
                 })
                 .collect();
+            let multi_rels = def
+                .fields
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.is_multi_rel())
+                .map(|(i, f)| {
+                    let j = f.junction_table(name);
+                    let del: Arc<str> = format!("DELETE FROM \"{j}\" WHERE \"owner\" = ?").into();
+                    let ins: Arc<str> = format!(
+                        "INSERT INTO \"{j}\" (\"owner\", \"target\", \"pos\") VALUES (?, ?, ?)"
+                    )
+                    .into();
+                    (i, FIRST_FIELD_SLOT + i, del, ins)
+                })
+                .collect();
             let sql = templates(def, &rules);
             collections.insert(
                 name.clone(),
@@ -392,6 +435,7 @@ impl Schema {
                     rules,
                     sql,
                     json_keys,
+                    multi_rels,
                     by_name,
                 }),
             );
@@ -412,25 +456,43 @@ impl Schema {
 fn templates(def: &CollectionDef, rules: &CompiledRules) -> Templates {
     let t = &def.name;
     let q = |s: &str| format!("\"{s}\"");
-    let user: Vec<String> = def.fields.iter().map(|f| q(&f.name)).collect();
+    // Multi-relation fields live in `_rel_*` junction tables; in the main table SELECT
+    // they occupy their slot as `NULL AS "<name>"` so slot indices stay aligned.
+    let select_user: Vec<String> = def
+        .fields
+        .iter()
+        .map(|f| {
+            if f.is_multi_rel() {
+                format!("NULL AS {}", q(&f.name))
+            } else {
+                q(&f.name)
+            }
+        })
+        .collect();
     let cols = SYSTEM
         .iter()
         .map(|s| q(s))
-        .chain(user.iter().cloned())
+        .chain(select_user)
         .collect::<Vec<_>>()
         .join(", ");
+    let table_user: Vec<String> = def
+        .fields
+        .iter()
+        .filter(|f| !f.is_multi_rel())
+        .map(|f| q(&f.name))
+        .collect();
     let rule_sql = |r: &Option<Compiled>| r.as_ref().map_or("0".to_owned(), |c| c.sql.clone());
 
     let view = |r: &str| -> Arc<str> {
         format!("SELECT {cols} FROM \"{t}\" AS t WHERE t.\"id\" = ? AND ({r})").into()
     };
 
-    // Insert params: id, created, updated, _v, _hlc, fields..., then rule binds.
+    // Insert params: id, created, updated, _v, _hlc, single-value user fields..., then rule binds.
     let ins_cols = SYSTEM
         .iter()
         .map(|s| q(s))
         .chain([q("_hlc")])
-        .chain(user.iter().cloned())
+        .chain(table_user.iter().cloned())
         .collect::<Vec<_>>();
     let ins_sel = ins_cols
         .iter()
@@ -445,13 +507,13 @@ fn templates(def: &CollectionDef, rules: &CompiledRules) -> Templates {
         .into()
     };
 
-    // Update params: updated, _v, _hlc, (provided flag, value) per field, id, rule binds.
+    // Update params: updated, _v, _hlc, (provided flag, value) per single-value field, id, rule binds.
     let mut set = vec![
         "\"updated\" = ?".to_owned(),
         "\"_v\" = ?".to_owned(),
         "\"_hlc\" = ?".to_owned(),
     ];
-    set.extend(user.iter().map(|c| format!("{c} = iif(?, ?, {c})")));
+    set.extend(table_user.iter().map(|c| format!("{c} = iif(?, ?, {c})")));
     let set = set.join(", ");
     let update = |r: &str| -> Arc<str> {
         format!("UPDATE \"{t}\" AS t SET {set} WHERE t.\"id\" = ? AND ({r}) RETURNING {cols}")

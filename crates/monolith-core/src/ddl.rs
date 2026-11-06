@@ -23,10 +23,34 @@ fn column(f: &FieldDef) -> String {
     c
 }
 
-/// Declared indexes plus one per relation (FK lookups, back-relations, cascades).
+fn junction_ddl(table: &str, f: &FieldDef) -> [String; 2] {
+    let j = f.junction_table(table);
+    let target = f.collection.as_deref().unwrap_or("");
+    let action = match f.on_delete.unwrap_or_default() {
+        OnDelete::Restrict | OnDelete::SetNull => "RESTRICT",
+        OnDelete::Cascade => "CASCADE",
+    };
+    [
+        format!(
+            "CREATE TABLE \"{j}\" (\
+             \"owner\" BLOB NOT NULL REFERENCES \"{table}\"(\"id\") ON DELETE CASCADE, \
+             \"target\" BLOB NOT NULL REFERENCES \"{target}\"(\"id\") ON DELETE {action}, \
+             \"pos\" INTEGER NOT NULL, \
+             PRIMARY KEY (\"owner\", \"target\")\
+             ) STRICT, WITHOUT ROWID"
+        ),
+        format!("CREATE INDEX \"{j}_target\" ON \"{j}\" (\"target\", \"owner\")"),
+    ]
+}
+
+/// Declared indexes plus one per single-relation (FK lookups, back-relations, cascades).
 fn indexes(def: &CollectionDef) -> Vec<IndexDef> {
     let mut v = def.indexes.clone();
-    for f in def.fields.iter().filter(|f| f.collection.is_some()) {
+    for f in def
+        .fields
+        .iter()
+        .filter(|f| f.collection.is_some() && !f.is_multi_rel())
+    {
         let auto = IndexDef {
             fields: vec![f.name.clone()],
             unique: false,
@@ -63,13 +87,16 @@ pub fn plan(old: Option<&CollectionDef>, new: &CollectionDef) -> CoreResult<Vec<
             "\"_v\" INTEGER NOT NULL".to_owned(),
             "\"_hlc\" INTEGER NOT NULL".to_owned(),
         ];
-        cols.extend(new.fields.iter().map(column));
+        cols.extend(new.fields.iter().filter(|f| !f.is_multi_rel()).map(column));
         // shortcut: WITHOUT ROWID is the provisional layout; the bake-off decides (doc 05 §2).
         let mut out = vec![format!(
             "CREATE TABLE \"{t}\" ({}) STRICT, WITHOUT ROWID",
             cols.join(", ")
         )];
         out.extend(indexes(new).iter().map(|ix| create_index(t, ix)));
+        for f in new.fields.iter().filter(|f| f.is_multi_rel()) {
+            out.extend(junction_ddl(t, f));
+        }
         return Ok(out);
     };
     if old.name != new.name {
@@ -91,15 +118,21 @@ pub fn plan(old: Option<&CollectionDef>, new: &CollectionDef) -> CoreResult<Vec<
         }
     }
     for f in &dropped {
-        out.push(format!("ALTER TABLE \"{t}\" DROP COLUMN \"{}\"", f.name));
+        if f.is_multi_rel() {
+            out.push(format!("DROP TABLE \"{}\"", f.junction_table(t)));
+        } else {
+            out.push(format!("ALTER TABLE \"{t}\" DROP COLUMN \"{}\"", f.name));
+        }
     }
     for f in &new.fields {
         match old.field(&f.name) {
+            None if f.is_multi_rel() => out.extend(junction_ddl(t, f)),
             None => out.push(format!("ALTER TABLE \"{t}\" ADD COLUMN {}", column(f))),
             Some(o)
                 if o.kind != f.kind
                     || o.only_int != f.only_int
                     || o.collection != f.collection
+                    || o.is_multi_rel() != f.is_multi_rel()
                     || o.on_delete.unwrap_or_default() != f.on_delete.unwrap_or_default() =>
             {
                 return Err(CoreError::BadRequest(format!(
@@ -129,13 +162,14 @@ mod tests {
     #[test]
     fn create_and_diff() {
         let v1 = def(
-            r#"{"name":"tasks","fields":[{"name":"title","type":"text"},{"name":"owner","type":"relation","collection":"users","onDelete":"cascade"}],"indexes":[{"fields":["title"],"unique":true}]}"#,
+            r#"{"name":"tasks","fields":[{"name":"title","type":"text"},{"name":"owner","type":"relation","collection":"users","onDelete":"cascade"},{"name":"tags","type":"relation","collection":"tags","maxSelect":10}],"indexes":[{"fields":["title"],"unique":true}]}"#,
         );
         let create = plan(None, &v1).unwrap();
         assert!(create[0].starts_with("CREATE TABLE \"tasks\" (\"id\" BLOB PRIMARY KEY"));
         assert!(
             create[0].contains("\"owner\" BLOB REFERENCES \"users\"(\"id\") ON DELETE CASCADE")
         );
+        assert!(!create[0].contains("\"tags\""));
         assert!(create.contains(
             &"CREATE UNIQUE INDEX \"idx_tasks_title_u\" ON \"tasks\" (\"title\")".to_owned()
         ));
@@ -143,6 +177,15 @@ mod tests {
             create
                 .contains(&"CREATE INDEX \"idx_tasks_owner\" ON \"tasks\" (\"owner\")".to_owned())
         );
+        assert!(
+            create
+                .iter()
+                .any(|s| s.starts_with("CREATE TABLE \"_rel_tasks_tags\""))
+        );
+        assert!(create.contains(
+            &"CREATE INDEX \"_rel_tasks_tags_target\" ON \"_rel_tasks_tags\" (\"target\", \"owner\")"
+                .to_owned()
+        ));
 
         let v2 = def(
             r#"{"name":"tasks","fields":[{"name":"owner","type":"relation","collection":"users","onDelete":"cascade"},{"name":"done","type":"bool"}]}"#,
@@ -152,6 +195,7 @@ mod tests {
             vec![
                 "DROP INDEX \"idx_tasks_title_u\"",
                 "ALTER TABLE \"tasks\" DROP COLUMN \"title\"",
+                "DROP TABLE \"_rel_tasks_tags\"",
                 "ALTER TABLE \"tasks\" ADD COLUMN \"done\" INTEGER",
             ]
         );

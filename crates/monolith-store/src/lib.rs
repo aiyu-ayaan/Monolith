@@ -62,6 +62,9 @@ pub struct Mutation {
     pub seq_slot: Option<usize>,
     /// Param index the writer overwrites with this mutation's HLC (the `_hlc` column).
     pub hlc_slot: Option<usize>,
+    /// Auxiliary statements (e.g. `_rel_*` junction table updates) run in the same
+    /// savepoint only after `sql` affects a row, without advancing `seq`.
+    pub post_sql: Vec<(Arc<str>, Vec<Value>)>,
 }
 
 /// All mutations of one `WriteOp` commit or fail together.

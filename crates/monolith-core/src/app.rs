@@ -187,8 +187,71 @@ fn parse_fields(c: &Collection, fields: Option<&str>, su: bool) -> CoreResult<Op
 struct ExpandNode {
     field: String,
     slot: usize,
+    multi: bool,
     target: Arc<Collection>,
     children: Vec<ExpandNode>,
+}
+
+type MultiRelMaps = Vec<(usize, HashMap<Id, Vec<Id>>)>;
+
+fn row_multi<'a>(row: &[Value], maps: &'a MultiRelMaps) -> Vec<(usize, &'a [Id])> {
+    let Some(Value::Blob(b)) = row.first() else {
+        return Vec::new();
+    };
+    let Ok(id) = <&Id>::try_from(&b[..]) else {
+        return Vec::new();
+    };
+    maps.iter()
+        .map(|(slot, m)| (*slot, m.get(id).map_or(&[][..], Vec::as_slice)))
+        .collect()
+}
+
+fn build_row_expand<'a>(
+    row: &[Value],
+    multi_maps: &MultiRelMaps,
+    nodes: &'a [ExpandNode],
+    exp_maps: &[HashMap<Id, Vec<u8>>],
+) -> Vec<(&'a str, Vec<u8>)> {
+    let row_id = row.first().and_then(|v| match v {
+        Value::Blob(b) => <&Id>::try_from(&b[..]).ok(),
+        _ => None,
+    });
+    nodes
+        .iter()
+        .zip(exp_maps)
+        .filter_map(|(n, map)| {
+            if n.multi {
+                let rid = row_id?;
+                let targets = multi_maps
+                    .iter()
+                    .find(|(s, _)| *s == n.slot)
+                    .and_then(|(_, m)| m.get(rid))
+                    .map_or(&[][..], Vec::as_slice);
+                let mut arr = Vec::new();
+                arr.push(b'[');
+                let mut first = true;
+                for tid in targets {
+                    if let Some(bytes) = map.get(tid) {
+                        if !first {
+                            arr.push(b',');
+                        }
+                        first = false;
+                        arr.extend_from_slice(bytes);
+                    }
+                }
+                arr.push(b']');
+                Some((n.field.as_str(), arr))
+            } else {
+                match row.get(n.slot) {
+                    Some(Value::Blob(b)) => <&Id>::try_from(&b[..])
+                        .ok()
+                        .and_then(|id| map.get(id))
+                        .map(|bytes| (n.field.as_str(), bytes.clone())),
+                    _ => None,
+                }
+            }
+        })
+        .collect()
 }
 
 fn parse_expand(
@@ -236,6 +299,7 @@ fn parse_expand(
                     level.push(ExpandNode {
                         field: seg.to_owned(),
                         slot,
+                        multi: f.is_multi_rel(),
                         target: target.clone(),
                         children: Vec::new(),
                     });
@@ -388,7 +452,7 @@ impl App {
     pub async fn delete_collection(&self, name: &str) -> CoreResult<()> {
         let _guard = self.schema_lock.lock().await;
         let cur = self.schema();
-        cur.get(name)?;
+        let old = cur.get(name)?;
         if let Some(other) = cur.collections.values().find(|c| {
             c.def.name != name
                 && c.def
@@ -408,11 +472,19 @@ impl App {
             .map(|(n, c)| (n.clone(), (c.cid, c.def.clone())))
             .collect();
         let next = Schema::build(cur.version + 1, defs)?;
-        let statements = vec![
-            format!("DROP TABLE \"{name}\""),
-            format!("DELETE FROM _collections WHERE name = {}", sql_str(name)),
-            "UPDATE _meta SET value = value + 1 WHERE key = 'schema_version'".into(),
-        ];
+        let mut statements: Vec<String> = old
+            .def
+            .fields
+            .iter()
+            .filter(|f| f.is_multi_rel())
+            .map(|f| format!("DROP TABLE \"{}\"", f.junction_table(name)))
+            .collect();
+        statements.push(format!("DROP TABLE \"{name}\""));
+        statements.push(format!(
+            "DELETE FROM _collections WHERE name = {}",
+            sql_str(name)
+        ));
+        statements.push("UPDATE _meta SET value = value + 1 WHERE key = 'schema_version'".into());
         self.store
             .apply_schema(MigrationPlan { statements })
             .await?;
@@ -449,7 +521,11 @@ impl App {
             Value::Null,
             Value::Null,
         ];
-        params.extend(body.values.iter().map(|v| v.clone().unwrap_or(Value::Null)));
+        for (i, f) in c.def.fields.iter().enumerate() {
+            if !f.is_multi_rel() {
+                params.push(body.values[i].clone().unwrap_or(Value::Null));
+            }
+        }
         let sql = match rule {
             Some(r) => {
                 let slots = body.rule_slots();
@@ -458,6 +534,21 @@ impl App {
             }
             None => c.sql.insert_su.clone(),
         };
+        let mut post_sql = Vec::new();
+        for (idx, _, _, ins_sql) in &c.multi_rels {
+            if let Some(ids) = &body.multi[*idx] {
+                for (pos, tid) in ids.iter().enumerate() {
+                    post_sql.push((
+                        ins_sql.clone(),
+                        vec![
+                            Value::Blob(id.into()),
+                            Value::Blob((*tid).into()),
+                            Value::Int(pos as i64),
+                        ],
+                    ));
+                }
+            }
+        }
         Ok(Mutation {
             op: Op::Insert,
             coll: c.cid,
@@ -467,6 +558,7 @@ impl App {
             params,
             seq_slot: Some(3),
             hlc_slot: Some(4),
+            post_sql,
         })
     }
 
@@ -493,10 +585,15 @@ impl App {
         let body: Body = codec::decode_body(c, json, false)?;
         let mut params = vec![Value::Int(now), Value::Null, Value::Null];
         let mut fields = 0u64;
-        for (i, v) in body.values.iter().enumerate() {
-            fields |= u64::from(v.is_some()) << i;
-            params.push(Value::Int(v.is_some() as i64));
-            params.push(v.clone().unwrap_or(Value::Null));
+        for (i, f) in c.def.fields.iter().enumerate() {
+            if f.is_multi_rel() {
+                fields |= u64::from(body.multi[i].is_some()) << i;
+            } else {
+                let v = &body.values[i];
+                fields |= u64::from(v.is_some()) << i;
+                params.push(Value::Int(v.is_some() as i64));
+                params.push(v.clone().unwrap_or(Value::Null));
+            }
         }
         params.push(Value::Blob(id.into()));
         let mut rule_binds = Vec::new();
@@ -518,6 +615,22 @@ impl App {
                 format!("{prefix} AND t.\"_v\" = ?{ret}").into()
             }
         };
+        let mut post_sql = Vec::new();
+        for (idx, _, del_sql, ins_sql) in &c.multi_rels {
+            if let Some(ids) = &body.multi[*idx] {
+                post_sql.push((del_sql.clone(), vec![Value::Blob(id.into())]));
+                for (pos, tid) in ids.iter().enumerate() {
+                    post_sql.push((
+                        ins_sql.clone(),
+                        vec![
+                            Value::Blob(id.into()),
+                            Value::Blob((*tid).into()),
+                            Value::Int(pos as i64),
+                        ],
+                    ));
+                }
+            }
+        }
         Ok((
             Mutation {
                 op: Op::Update,
@@ -528,6 +641,7 @@ impl App {
                 params,
                 seq_slot: Some(1),
                 hlc_slot: Some(2),
+                post_sql,
             },
             rule_binds,
         ))
@@ -581,6 +695,7 @@ impl App {
                 params,
                 seq_slot: None,
                 hlc_slot: None,
+                post_sql: Vec::new(),
             },
             rule_binds,
         ))
@@ -662,10 +777,57 @@ impl App {
         }
     }
 
+    /// Batched junction lookup for all multi-relation fields on `c` across `rows`.
+    async fn load_multi_rels(
+        &self,
+        c: &Collection,
+        rows: &[Vec<Value>],
+    ) -> CoreResult<MultiRelMaps> {
+        if c.multi_rels.is_empty() || rows.is_empty() {
+            return Ok(Vec::new());
+        }
+        let owners: Vec<Value> = rows
+            .iter()
+            .filter_map(|r| match r.first() {
+                Some(v @ Value::Blob(_)) => Some(v.clone()),
+                _ => None,
+            })
+            .collect();
+        if owners.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = vec!["?"; owners.len()].join(", ");
+        let mut out = Vec::with_capacity(c.multi_rels.len());
+        for &(field_idx, slot, _, _) in &c.multi_rels {
+            let j = c.def.fields[field_idx].junction_table(&c.def.name);
+            let sql = format!(
+                "SELECT \"owner\", \"target\" FROM \"{j}\" WHERE \"owner\" IN ({placeholders}) ORDER BY \"owner\", \"pos\""
+            );
+            let jrows = self
+                .store
+                .query(Query {
+                    sql: sql.into(),
+                    params: owners.clone(),
+                })
+                .await?;
+            let mut map: HashMap<Id, Vec<Id>> = HashMap::new();
+            for jr in jrows {
+                if let [Value::Blob(ob), Value::Blob(tb)] = &jr[..]
+                    && let (Ok(oid), Ok(tid)) = (<&Id>::try_from(&ob[..]), <&Id>::try_from(&tb[..]))
+                {
+                    map.entry(*oid).or_default().push(*tid);
+                }
+            }
+            out.push((slot, map));
+        }
+        Ok(out)
+    }
+
     fn resolve_expand<'a>(
         &'a self,
         p: &'a Principal,
         rows: &'a [Vec<Value>],
+        multi_maps: &'a MultiRelMaps,
         nodes: &'a [ExpandNode],
         now: i64,
     ) -> Pin<Box<dyn Future<Output = CoreResult<ExpandMaps>> + Send + 'a>> {
@@ -673,12 +835,29 @@ impl App {
             let mut out = Vec::with_capacity(nodes.len());
             for node in nodes {
                 let mut ids: Vec<Id> = Vec::new();
-                for r in rows {
-                    if let Some(Value::Blob(b)) = r.get(node.slot)
-                        && let Ok(id) = <&Id>::try_from(&b[..])
-                        && !ids.contains(id)
-                    {
-                        ids.push(*id);
+                if node.multi {
+                    if let Some((_, m)) = multi_maps.iter().find(|(s, _)| *s == node.slot) {
+                        for r in rows {
+                            if let Some(Value::Blob(b)) = r.first()
+                                && let Ok(oid) = <&Id>::try_from(&b[..])
+                                && let Some(tids) = m.get(oid)
+                            {
+                                for tid in tids {
+                                    if !ids.contains(tid) {
+                                        ids.push(*tid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    for r in rows {
+                        if let Some(Value::Blob(b)) = r.get(node.slot)
+                            && let Ok(id) = <&Id>::try_from(&b[..])
+                            && !ids.contains(id)
+                        {
+                            ids.push(*id);
+                        }
                     }
                 }
                 if ids.is_empty() || (!p.superuser && node.target.rules.view.is_none()) {
@@ -706,10 +885,11 @@ impl App {
                         params,
                     })
                     .await?;
+                let target_multi = self.load_multi_rels(&node.target, &target_rows).await?;
                 let child_maps = if node.children.is_empty() || target_rows.is_empty() {
                     Vec::new()
                 } else {
-                    self.resolve_expand(p, &target_rows, &node.children, now)
+                    self.resolve_expand(p, &target_rows, &target_multi, &node.children, now)
                         .await?
                 };
                 let mut encoded_map = HashMap::with_capacity(target_rows.len());
@@ -720,17 +900,12 @@ impl App {
                     let Ok(tid) = <&Id>::try_from(&b[..]) else {
                         continue;
                     };
-                    let child_exp: Vec<(&str, &[u8])> = node
-                        .children
+                    let tr_multi = row_multi(tr, &target_multi);
+                    let child_owned =
+                        build_row_expand(tr, &target_multi, &node.children, &child_maps);
+                    let child_exp: Vec<(&str, &[u8])> = child_owned
                         .iter()
-                        .zip(&child_maps)
-                        .filter_map(|(cn, cmap)| match tr.get(cn.slot) {
-                            Some(Value::Blob(cb)) => <&Id>::try_from(&cb[..])
-                                .ok()
-                                .and_then(|cid| cmap.get(cid))
-                                .map(|bytes| (cn.field.as_str(), bytes.as_slice())),
-                            _ => None,
-                        })
+                        .map(|(k, v)| (*k, v.as_slice()))
                         .collect();
                     let mut buf = Vec::with_capacity(256);
                     codec::write_record_ext(
@@ -739,6 +914,7 @@ impl App {
                         tr,
                         p.superuser,
                         None,
+                        &tr_multi,
                         &child_exp,
                     );
                     encoded_map.insert(*tid, buf);
@@ -759,26 +935,20 @@ impl App {
         expand: Option<&str>,
     ) -> CoreResult<RecordOut> {
         let nodes = parse_expand(schema, c, expand, p.superuser)?;
+        let rows_slice = [row.to_vec()];
+        let multi_maps = self.load_multi_rels(c, &rows_slice).await?;
         let exp_maps = if nodes.is_empty() {
             Vec::new()
         } else {
-            let rows_slice = [row.to_vec()];
-            self.resolve_expand(p, &rows_slice, &nodes, now_us())
+            self.resolve_expand(p, &rows_slice, &multi_maps, &nodes, now_us())
                 .await?
         };
-        let row_exp: Vec<(&str, &[u8])> = nodes
-            .iter()
-            .zip(&exp_maps)
-            .filter_map(|(n, map)| match row.get(n.slot) {
-                Some(Value::Blob(b)) => <&Id>::try_from(&b[..])
-                    .ok()
-                    .and_then(|id| map.get(id))
-                    .map(|bytes| (n.field.as_str(), bytes.as_slice())),
-                _ => None,
-            })
-            .collect();
+        let rm = row_multi(row, &multi_maps);
+        let row_owned = build_row_expand(row, &multi_maps, &nodes, &exp_maps);
+        let row_exp: Vec<(&str, &[u8])> =
+            row_owned.iter().map(|(k, v)| (*k, v.as_slice())).collect();
         let mut json = Vec::with_capacity(256);
-        codec::write_record_ext(&mut json, c, row, p.superuser, only, &row_exp);
+        codec::write_record_ext(&mut json, c, row, p.superuser, only, &rm, &row_exp);
         Ok(RecordOut {
             json,
             version: row_version(row),
@@ -1123,10 +1293,12 @@ impl App {
         let more = rows.len() > limit;
         rows.truncate(limit);
 
+        let multi_maps = self.load_multi_rels(c, &rows).await?;
         let exp_maps = if expand_nodes.is_empty() || rows.is_empty() {
             Vec::new()
         } else {
-            self.resolve_expand(p, &rows, &expand_nodes, now).await?
+            self.resolve_expand(p, &rows, &multi_maps, &expand_nodes, now)
+                .await?
         };
         let total = match lp.total {
             TotalMode::None => None,
@@ -1139,18 +1311,11 @@ impl App {
             if i > 0 {
                 out.push(b',');
             }
-            let row_exp: Vec<(&str, &[u8])> = expand_nodes
-                .iter()
-                .zip(&exp_maps)
-                .filter_map(|(n, map)| match row.get(n.slot) {
-                    Some(Value::Blob(b)) => <&Id>::try_from(&b[..])
-                        .ok()
-                        .and_then(|id| map.get(id))
-                        .map(|bytes| (n.field.as_str(), bytes.as_slice())),
-                    _ => None,
-                })
-                .collect();
-            codec::write_record_ext(&mut out, c, row, su, only.as_deref(), &row_exp);
+            let rm = row_multi(row, &multi_maps);
+            let row_owned = build_row_expand(row, &multi_maps, &expand_nodes, &exp_maps);
+            let row_exp: Vec<(&str, &[u8])> =
+                row_owned.iter().map(|(k, v)| (*k, v.as_slice())).collect();
+            codec::write_record_ext(&mut out, c, row, su, only.as_deref(), &rm, &row_exp);
         }
         out.extend_from_slice(b"],\"next\":");
         match rows.last().filter(|_| more) {

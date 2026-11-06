@@ -36,7 +36,7 @@ pub fn parse_sort(c: &Collection, s: &str, su: bool) -> CoreResult<Vec<SortKey>>
             .filter(|&s| s != 3)
             .ok_or_else(|| bad(format!("cannot sort by '{name}'")))?;
         if let Some(f) = c.field_at(slot)
-            && (f.kind == FieldType::Json || (f.hidden && !su))
+            && (f.kind == FieldType::Json || f.is_multi_rel() || (f.hidden && !su))
         {
             return Err(bad(format!("cannot sort by '{name}'")));
         }

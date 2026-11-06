@@ -100,16 +100,18 @@ pub fn write_record(
     su: bool,
     only: Option<&[usize]>,
 ) {
-    write_record_ext(out, c, row, su, only, &[]);
+    write_record_ext(out, c, row, su, only, &[], &[]);
 }
 
-/// Writes one record object with optional pre-encoded `expand` entries (`(field_name, json_bytes)`).
+/// Writes one record object with optional multi-relation values (`(slot, ids)`) and
+/// pre-encoded `expand` entries (`(field_name, json_bytes)`).
 pub fn write_record_ext(
     out: &mut Vec<u8>,
     c: &Collection,
     row: &[Value],
     su: bool,
     only: Option<&[usize]>,
+    multi_rels: &[(usize, &[Id])],
     expand: &[(&str, &[u8])],
 ) {
     out.push(b'{');
@@ -126,6 +128,23 @@ pub fn write_record_ext(
         }
         first = false;
         out.extend_from_slice(c.json_keys[slot].as_bytes());
+        if f.is_some_and(|f| f.is_multi_rel()) {
+            let ids = multi_rels
+                .iter()
+                .find(|(s, _)| *s == slot)
+                .map_or(&[][..], |(_, ids)| *ids);
+            out.push(b'[');
+            for (i, id) in ids.iter().enumerate() {
+                if i > 0 {
+                    out.push(b',');
+                }
+                out.push(b'"');
+                out.extend_from_slice(&encode_id(id));
+                out.push(b'"');
+            }
+            out.push(b']');
+            continue;
+        }
         let kind = match slot {
             0 => Some(FieldType::Relation), // ids encode like relations
             1 | 2 => Some(FieldType::Date),
@@ -153,13 +172,15 @@ pub fn write_record_ext(
 
 // ---------- input ----------
 
-/// A decoded request body. `values[i]` is user field `i`; `None` = not sent.
+/// A decoded request body. `values[i]` is user field `i` (`None` = not sent);
+/// `multi[i]` holds target IDs for multi-relation user field `i` (`None` = not sent).
 #[derive(Debug, Default)]
 pub struct Body {
     pub id: Option<Id>,
     pub created: Option<i64>,
     pub updated: Option<i64>,
     pub values: Vec<Option<Value>>,
+    pub multi: Vec<Option<Vec<Id>>>,
 }
 
 impl Body {
@@ -204,6 +225,7 @@ impl<'de> Visitor<'de> for BodySeed<'_> {
             created: None,
             updated: None,
             values: vec![None; n],
+            multi: vec![None; n],
         };
         while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
             match self.c.slot(&key) {
@@ -241,19 +263,27 @@ impl<'de> Visitor<'de> for BodySeed<'_> {
                     map.next_value::<IgnoredAny>()?;
                 }
                 Some(slot) if slot >= FIRST_FIELD_SLOT => {
-                    let f = &self.c.def.fields[slot - FIRST_FIELD_SLOT];
-                    let v = if f.kind == FieldType::Json {
-                        let raw = map.next_value::<Box<RawValue>>()?;
-                        Ok(match raw.get() {
-                            "null" => Value::Null,
-                            s => Value::Text(s.into()),
-                        })
+                    let idx = slot - FIRST_FIELD_SLOT;
+                    let f = &self.c.def.fields[idx];
+                    if f.is_multi_rel() {
+                        match map.next_value_seed(MultiRelSeed)? {
+                            Ok(ids) => body.multi[idx] = Some(ids),
+                            Err(msg) => self.errors.push(FieldError::new(&f.name, "type", msg)),
+                        }
                     } else {
-                        map.next_value_seed(ScalarSeed(f.kind))?
-                    };
-                    match v {
-                        Ok(v) => body.values[slot - FIRST_FIELD_SLOT] = Some(v),
-                        Err(msg) => self.errors.push(FieldError::new(&f.name, "type", msg)),
+                        let v = if f.kind == FieldType::Json {
+                            let raw = map.next_value::<Box<RawValue>>()?;
+                            Ok(match raw.get() {
+                                "null" => Value::Null,
+                                s => Value::Text(s.into()),
+                            })
+                        } else {
+                            map.next_value_seed(ScalarSeed(f.kind))?
+                        };
+                        match v {
+                            Ok(v) => body.values[idx] = Some(v),
+                            Err(msg) => self.errors.push(FieldError::new(&f.name, "type", msg)),
+                        }
                     }
                 }
                 Some(_) => {
@@ -272,6 +302,79 @@ impl<'de> Visitor<'de> for BodySeed<'_> {
             }
         }
         Ok(body)
+    }
+}
+
+/// Decodes a multi-relation value (`null`, `""`, a single id string, or an array of id strings).
+struct MultiRelSeed;
+
+impl<'de> DeserializeSeed<'de> for MultiRelSeed {
+    type Value = Result<Vec<Id>, &'static str>;
+    fn deserialize<D: Deserializer<'de>>(self, d: D) -> Result<Self::Value, D::Error> {
+        d.deserialize_any(self)
+    }
+}
+
+impl<'de> Visitor<'de> for MultiRelSeed {
+    type Value = Result<Vec<Id>, &'static str>;
+
+    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("an array of record ids")
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(Ok(Vec::new()))
+    }
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(Ok(Vec::new()))
+    }
+    fn visit_str<E>(self, s: &str) -> Result<Self::Value, E> {
+        if s.is_empty() {
+            return Ok(Ok(Vec::new()));
+        }
+        Ok(decode_id(s)
+            .map(|id| vec![id])
+            .ok_or("expected an array of record ids"))
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut ids = Vec::new();
+        let mut bad = false;
+        while let Some(elem) = seq.next_element_seed(ScalarSeed(FieldType::Relation))? {
+            match elem {
+                Ok(Value::Blob(b)) => {
+                    if let Ok(id) = <&Id>::try_from(&b[..]) {
+                        if !ids.contains(id) {
+                            ids.push(*id);
+                        }
+                    } else {
+                        bad = true;
+                    }
+                }
+                Ok(Value::Null) => {}
+                _ => bad = true,
+            }
+        }
+        if bad {
+            Ok(Err("expected an array of record ids"))
+        } else {
+            Ok(Ok(ids))
+        }
+    }
+    fn visit_bool<E>(self, _: bool) -> Result<Self::Value, E> {
+        Ok(Err("expected an array of record ids"))
+    }
+    fn visit_i64<E>(self, _: i64) -> Result<Self::Value, E> {
+        Ok(Err("expected an array of record ids"))
+    }
+    fn visit_u64<E>(self, _: u64) -> Result<Self::Value, E> {
+        Ok(Err("expected an array of record ids"))
+    }
+    fn visit_f64<E>(self, _: f64) -> Result<Self::Value, E> {
+        Ok(Err("expected an array of record ids"))
+    }
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(Err("expected an array of record ids"))
     }
 }
 
@@ -362,8 +465,12 @@ pub fn decode_body(c: &Collection, json: &[u8], create: bool) -> CoreResult<Body
     .deserialize(&mut de)
     .and_then(|b| de.end().map(|()| b))
     .map_err(|e| CoreError::BadRequest(format!("invalid JSON body: {e}")))?;
-    for (f, v) in c.def.fields.iter().zip(&body.values) {
-        check_field(f, v.as_ref(), create, &mut errors);
+    for (i, f) in c.def.fields.iter().enumerate() {
+        if f.is_multi_rel() {
+            check_multi_field(f, body.multi[i].as_deref(), create, &mut errors);
+        } else {
+            check_field(f, body.values[i].as_ref(), create, &mut errors);
+        }
     }
     if errors.is_empty() {
         Ok(body)
@@ -389,6 +496,23 @@ pub fn decode_sample(c: &Collection, json: &[u8]) -> CoreResult<Vec<Value>> {
         Ok(body.rule_slots())
     } else {
         Err(CoreError::Validation(errors))
+    }
+}
+
+fn check_multi_field(f: &FieldDef, ids: Option<&[Id]>, create: bool, errors: &mut Vec<FieldError>) {
+    let empty = ids.is_none_or(<[Id]>::is_empty);
+    if f.required && empty && (create || ids.is_some()) {
+        errors.push(FieldError::new(&f.name, "required", "value required"));
+        return;
+    }
+    if let (Some(ids), Some(max)) = (ids, f.max_select)
+        && ids.len() > max as usize
+    {
+        errors.push(FieldError::new(
+            &f.name,
+            "too_many",
+            format!("at most {max} relations"),
+        ));
     }
 }
 

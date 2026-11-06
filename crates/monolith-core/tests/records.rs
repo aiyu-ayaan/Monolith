@@ -848,3 +848,194 @@ async fn expand_total_count_upsert_if_match_and_dry_run() {
     assert!(qplan.uses_scan);
     assert!(!qplan.suggested_indexes.is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_relations_junction_filters_and_expand() {
+    let (_dir, reg) = setup().await;
+    let app = reg.app("demo").await.unwrap();
+    app.put_collection(
+        def(json!({
+            "name":"tags",
+            "fields":[
+                {"name":"name","type":"text","required":true},
+                {"name":"weight","type":"number","onlyInt":true}
+            ],
+            "rules":{"list":"","view":"name != 'hidden'"}
+        })),
+        true,
+    )
+    .await
+    .unwrap();
+    app.put_collection(
+        def(json!({
+            "name":"articles",
+            "fields":[
+                {"name":"title","type":"text","required":true},
+                {"name":"tags","type":"relation","collection":"tags","maxSelect":3,"onDelete":"cascade"},
+                {"name":"watchers","type":"relation","collection":"users","maxSelect":5,"onDelete":"restrict"}
+            ],
+            "rules":{"list":"","view":"","create":"","update":"","delete":""}
+        })),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let t_rust = parse(
+        &app.create_record(&su(), "tags", br#"{"name":"rust","weight":10}"#)
+            .await
+            .unwrap(),
+    );
+    let t_db = parse(
+        &app.create_record(&su(), "tags", br#"{"name":"db","weight":20}"#)
+            .await
+            .unwrap(),
+    );
+    let t_web = parse(
+        &app.create_record(&su(), "tags", br#"{"name":"web","weight":5}"#)
+            .await
+            .unwrap(),
+    );
+    let t_hid = parse(
+        &app.create_record(&su(), "tags", br#"{"name":"hidden","weight":99}"#)
+            .await
+            .unwrap(),
+    );
+    let u1 = parse(
+        &app.create_record(&su(), "users", br#"{"name":"ann"}"#)
+            .await
+            .unwrap(),
+    );
+
+    // Create with duplicate IDs deduplicates while preserving order; expand returns JSON array.
+    let a1 = parse(
+        &app.create_record_with(
+            &anon(),
+            "articles",
+            json!({
+                "title":"one",
+                "tags":[t_rust["id"], t_db["id"], t_rust["id"], t_hid["id"]],
+                "watchers":[u1["id"]]
+            })
+            .to_string()
+            .as_bytes(),
+            &WriteOpts {
+                expand: Some("tags,watchers".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .json,
+    );
+    assert_eq!(a1["tags"], json!([t_rust["id"], t_db["id"], t_hid["id"]]));
+    // Non-superuser expand filters out 'hidden' tag via tags view rule.
+    let exp_tags = a1["expand"]["tags"].as_array().unwrap();
+    assert_eq!(exp_tags.len(), 2);
+    assert_eq!(exp_tags[0]["name"], "rust");
+    assert_eq!(exp_tags[1]["name"], "db");
+    assert_eq!(a1["expand"]["watchers"][0]["name"], "ann");
+
+    let a2 = parse(
+        &app.create_record(
+            &anon(),
+            "articles",
+            json!({"title":"two","tags":[t_rust["id"]]})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(a2["tags"], json!([t_rust["id"]]));
+    let a3 = parse(
+        &app.create_record(&anon(), "articles", br#"{"title":"three"}"#)
+            .await
+            .unwrap(),
+    );
+    assert_eq!(a3["tags"], json!([]));
+
+    // maxSelect validation rejects > 3 distinct tags.
+    let too_many = app
+        .create_record(
+            &anon(),
+            "articles",
+            json!({
+                "title":"overflow",
+                "tags":[t_rust["id"], t_db["id"], t_web["id"], t_hid["id"]]
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .await;
+    assert!(matches!(too_many, Err(CoreError::Validation(_))));
+
+    // Any-of (?=) vs all-of (=) and empty check (= null / != '').
+    let list_titles = |filter: &str| {
+        let app = app.clone();
+        let filter = filter.to_owned();
+        async move {
+            let page = parse(
+                &app.list_records(
+                    &su(),
+                    "articles",
+                    &ListParams {
+                        filter,
+                        sort: "title".into(),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap(),
+            );
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["title"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_eq!(list_titles("tags.name ?= 'db'").await, vec!["one"]);
+    assert_eq!(list_titles("tags.name ?= 'rust'").await, vec!["one", "two"]);
+    // All-of: a1 has rust+db+hidden (not all 'rust'); a2 has only 'rust'; a3 has none.
+    assert_eq!(list_titles("tags.name = 'rust'").await, vec!["two"]);
+    assert_eq!(list_titles("tags.weight >= 10").await, vec!["one", "two"]);
+    assert_eq!(list_titles("tags = null").await, vec!["three"]);
+    assert_eq!(list_titles("tags != ''").await, vec!["one", "two"]);
+    assert_eq!(
+        list_titles(&format!("tags ?= '{}'", t_db["id"].as_str().unwrap())).await,
+        vec!["one"]
+    );
+
+    // Update replaces junction rows and preserves new order.
+    let a1_upd = parse(
+        &app.update_record(
+            &anon(),
+            "articles",
+            a1["id"].as_str().unwrap(),
+            json!({"tags":[t_web["id"], t_rust["id"]]})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(a1_upd["tags"], json!([t_web["id"], t_rust["id"]]));
+
+    // onDelete cascade on tags removes the tag from articles.tags; restrict on watchers blocks deleting u1.
+    app.delete_record(&su(), "tags", t_web["id"].as_str().unwrap())
+        .await
+        .unwrap();
+    let a1_after = parse(
+        &app.view_record(&anon(), "articles", a1["id"].as_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(a1_after["tags"], json!([t_rust["id"]]));
+    assert!(matches!(
+        app.delete_record(&su(), "users", u1["id"].as_str().unwrap())
+            .await,
+        Err(CoreError::Conflict(_))
+    ));
+}

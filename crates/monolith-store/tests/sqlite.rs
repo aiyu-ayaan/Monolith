@@ -41,6 +41,7 @@ fn mutation(op: Op, sql: &Arc<str>, id: [u8; 16], n: i64) -> Mutation {
         params: vec![Value::Blob(id.into()), Value::Int(n)],
         seq_slot: None,
         hlc_slot: None,
+        post_sql: Vec::new(),
     }
 }
 
