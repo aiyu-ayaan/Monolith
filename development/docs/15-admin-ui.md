@@ -37,7 +37,10 @@ grids, log tail, analytics counters). JSX + TypeScript keeps the code familiar.
 | Charts | uPlot (very fast canvas time-series) for analytics and metrics |
 | Styling | Plain CSS with design tokens (CSS variables) + UnoCSS (build-time atomic CSS, no runtime) |
 | Icons | Inline SVG sprite (tree-shaken) |
-| Realtime | Same TS SDK used by apps (dogfooding) |
+| Realtime | Same TS SDK used by apps (dogfooding via `workspace:*`) |
+
+Managed as `@monolith/ui` in the root `pnpm` monorepo workspace. Dev: `pnpm dev:ui`;
+build: `pnpm --filter @monolith/ui build` (or `pnpm build` across workspace).
 
 ## 4. Delivery
 

@@ -10,17 +10,22 @@ for any app, Postgres runs **inside the same container** as a supervised child p
 ```dockerfile
 # syntax=docker/dockerfile:1.7
 FROM node:24-alpine AS ui
-WORKDIR /ui
-COPY ui/package.json ui/package-lock.json ./
-RUN npm ci
-COPY ui/ .
-RUN npm run build                      # emits dist/ with .br and .gz siblings
+ENV PNPM_HOME="/pnpm"
+ENV PATH="$PNPM_HOME:$PATH"
+RUN corepack enable
+WORKDIR /app
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY ui/package.json ./ui/
+COPY sdks/typescript/package.json ./sdks/typescript/
+RUN pnpm install --frozen-lockfile
+COPY ui/ ./ui/
+COPY sdks/typescript/ ./sdks/typescript/
+RUN pnpm --filter @monolith/ui build    # emits dist/ with .br and .gz siblings
 
 FROM rust:1-bookworm AS build
-RUN apt-get update && apt-get install -y --no-install-recommends musl-tools clang && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
-COPY --from=ui /ui/dist ui/dist
+COPY --from=ui /app/ui/dist ui/dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked -p monolith-server --target x86_64-unknown-linux-musl \

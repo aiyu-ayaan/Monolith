@@ -39,7 +39,7 @@
 - `cargo deny` (licenses, advisories, bans), `cargo audit` in CI.
 - Pinned toolchain (`rust-toolchain.toml`), `--locked` builds, reproducible Docker build.
 - SBOM (CycloneDX) and image signing (cosign) for releases.
-- `npm ci` with lockfile; `npm audit` in CI for the UI.
+- `pnpm install --frozen-lockfile`; `pnpm audit` in CI for JS/TS packages.
 
 ## 5. Privacy
 

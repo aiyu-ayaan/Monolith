@@ -1,0 +1,18 @@
+{
+  "name": "monolith",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Monolith monorepo workspace for admin UI, SDKs, and web examples",
+  "packageManager": "pnpm@12.4.2",
+  "scripts": {
+    "setup": "pnpm install",
+    "init": "pnpm install",
+    "build": "pnpm -r run build",
+    "dev:ui": "pnpm --filter @monolith/ui dev",
+    "build:ui": "pnpm --filter @monolith/ui build",
+    "build:sdk": "pnpm --filter @monolith/client build",
+    "test": "pnpm -r run test",
+    "test:sdk": "pnpm --filter @monolith/client test",
+    "clean": "pnpm -r --parallel exec rm -rf dist node_modules"
+  }
+}

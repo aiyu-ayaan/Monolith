@@ -11,6 +11,7 @@ or through an SDK.
 Monolith/
 ├── CLAUDE.md                      contributor/agent guide
 ├── Cargo.toml, rust-toolchain.toml   (created in Phase 0)
+├── package.json, pnpm-workspace.yaml, pnpm-lock.yaml  JS/TS workspace (ui, sdks/typescript, web-typescript)
 ├── crates/                        Rust server workspace (see 03 §8)
 ├── ui/                            SolidJS admin UI (see 15)
 ├── docker/                        Dockerfile, compose.yaml (see 18)
@@ -76,6 +77,15 @@ feature. SDKs add convenience: session refresh, typed models, offline store, rec
 5. Docs in `docs/api/` are updated in the same change.
 
 ## 4. Library packaging
+
+### JS/TS Workspace (pnpm)
+
+All JS/TS packages (`ui/`, `sdks/typescript/`, `examples/web-typescript/`) are unified
+under a root `pnpm` monorepo workspace (`pnpm-workspace.yaml`).
+- Root init / setup: `pnpm setup` or `pnpm install` initializes all projects at once.
+- Inter-package dependencies use `workspace:*` (e.g. `@monolith/ui` and web examples
+  consume `@monolith/client` directly from the tree).
+- Common tasks: `pnpm build`, `pnpm test`, `pnpm dev:ui`.
 
 ### TypeScript (npm: `@monolith/client`)
 

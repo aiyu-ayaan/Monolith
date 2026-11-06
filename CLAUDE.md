@@ -48,6 +48,7 @@ Change a decision only by updating its doc (and ADR status) in the same change.
 Full tree and packaging rules: `development/docs/21-repository-structure.md`.
 
 ```
+package.json, pnpm-workspace.yaml  JS/TS workspace root (ui, sdks/typescript, web examples)
 api/           language-agnostic contract: openapi, asyncapi, jsonschema, mcp, conformance vectors
 docs/          user-facing API docs (rest, websocket, kotlin, typescript, auth, rules) and guides
 agent-skills/  SKILL.md pack for AI agents (overview, rest, realtime, sync, rules, auth-keys, sdks, debug); installed via `monolith agent-init`
@@ -83,15 +84,23 @@ REST and WebSocket must stay complete without an SDK.
   new hot-path code.
 - Tests: unit tests next to code, integration tests in `crates/*/tests`, SDK
   conformance tests against a real server container.
+- JS/TS monorepo managed with `pnpm` workspaces (`ui`, `sdks/typescript`, `examples/web-typescript`).
+  Root `pnpm setup` or `pnpm install` sets up all JS/TS projects.
 - Commit only when asked. Use Conventional Commits.
 
 ## Commands (planned; update when the workspace exists)
 
 ```bash
+# JS/TS workspace
+pnpm setup                            # or `pnpm install` — initialises all JS/TS projects
+pnpm dev:ui                           # admin UI dev server
+pnpm build                            # builds all JS/TS workspace projects
+pnpm test                             # runs tests across JS/TS packages
+
+# Rust backend
 cargo build --release -p monolith-server
 cargo test --workspace
 cargo bench -p monolith-store
-cd ui && npm ci && npm run dev        # admin UI dev server
 docker build -t monolith:dev .
 ```
 

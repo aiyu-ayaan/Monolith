@@ -22,6 +22,7 @@ Source of truth for design: `docs/README.md`. Phases: `docs/20-roadmap.md`.
 - [x] Deployment, security, roadmap (`docs/18`–`20`)
 - [x] Root `CLAUDE.md`
 - [x] Repository structure: `api/` contract, `docs/` user API docs, `sdks/` (npm, Android/Kotlin, Dart, Swift, Python, Rust) (`docs/21`)
+- [x] Common JS/TS project setup with pnpm workspaces (`ui/`, `sdks/typescript/`, `examples/web-typescript/`)
 
 ## Blocked on owner answers (`docs/20` open questions)
 
