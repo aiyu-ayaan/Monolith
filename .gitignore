@@ -1,0 +1,24 @@
+# Rust
+target/
+# Node
+node_modules/
+dist/
+# Python
+__pycache__/
+*.pyc
+# Gradle / Android
+.gradle/
+build/
+local.properties
+# Bench output (keep committed summaries only)
+bench/results/*.raw
+# Local data / secrets
+*.db
+*.db-wal
+*.db-shm
+.env
+*.key
+# Editor / tooling
+.idea/
+.vscode/
+.codegraph/
