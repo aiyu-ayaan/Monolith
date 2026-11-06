@@ -20,7 +20,7 @@ Source of truth for design: `docs/README.md`. Phases: `docs/20-roadmap.md`.
 - [x] Files, extensibility, admin UI framework choice (SolidJS) (`docs/13`–`15`)
 - [x] Performance engineering and benchmark plan (`docs/16`, `17`)
 - [x] Deployment, security, roadmap (`docs/18`–`20`)
-- [x] Root `CLAUDE.md`
+- [x] Root `CLAUDE.md` and `README.md` (architecture, data model, API quick-start)
 - [x] Repository structure: `api/` contract, `docs/` user API docs, `sdks/` (npm, Android/Kotlin, Dart, Swift, Python, Rust) (`docs/21`)
 - [x] Common JS/TS project setup with pnpm workspaces (`ui/`, `sdks/typescript/`, `examples/web-typescript/`)
 
@@ -92,7 +92,7 @@ Next: Phase 1 follow-ups below, then the exit gates.
 
 - [x] Agent skills pack scaffold (`agent-skills/`) and debug-surface design (`docs/22`)
 - [ ] Build `tools/agent-pack` generator + `monolith agent-init` CLI; serve `/llms.txt`, `/agent/*`
-- [ ] Implement debug endpoints (trace, rules:explain, query:explain, realtime inspect, sync status, dry_run) in Phase 1–2
+- [x] Implement Phase 1 debug endpoints (trace ring buffer, rules:explain, query:explain, collections:diff, dry_run); realtime inspect and sync status in Phase 2–3
 - [ ] Fill `api/openapi` + `api/asyncapi` + conformance vectors (contract first)
 - [ ] Phase 2: auth, API keys, realtime, rate limiting, TS + Dart SDK v0
 - [ ] Phase 3: sync, files, backups, pilot app
