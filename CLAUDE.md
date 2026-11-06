@@ -86,7 +86,9 @@ REST and WebSocket must stay complete without an SDK.
   conformance tests against a real server container.
 - JS/TS monorepo managed with `pnpm` workspaces (`ui`, `sdks/typescript`, `examples/web-typescript`).
   Root `pnpm setup` or `pnpm install` sets up all JS/TS projects.
-- Commit only when asked. Use Conventional Commits.
+- Commit at each completed stage of work (one logical change per commit). Use
+  Conventional Commits.
+- Never add AI co-author trailers (no `Co-Authored-By:` lines) to commits or PRs.
 
 ## Commands (planned; update when the workspace exists)
 
