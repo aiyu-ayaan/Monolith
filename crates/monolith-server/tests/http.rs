@@ -615,3 +615,110 @@ async fn rest_followups_and_debug_surface() {
     assert_eq!(r_slow.status, StatusCode::OK);
     assert!(!r_slow.body["items"].as_array().unwrap().is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stats_count_reads_writes_and_record_ops() {
+    let t = T::new().await;
+    let r = t
+        .call(Method::GET, "/api/v1/system/stats", None, false)
+        .await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"st"})),
+        true,
+    )
+    .await;
+    let coll = json!({"name":"notes","fields":[{"name":"body","type":"text"}],"rules":{"list":"","view":"","create":""}});
+    let r = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/st/collections",
+            Some(coll),
+            true,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    let recs = "/api/v1/apps/st/collections/notes/records";
+    for i in 0..3 {
+        let r = t
+            .call(
+                Method::POST,
+                recs,
+                Some(json!({"body": format!("n{i}")})),
+                false,
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::CREATED);
+    }
+    let id = t.call(Method::GET, recs, None, false).await.body["items"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let r = t
+        .call(Method::DELETE, &format!("{recs}/{id}"), None, true)
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    t.call(Method::GET, &format!("{recs}/{id}"), None, false)
+        .await; // 404
+
+    // Record ops arrive through the change bus task; give it a moment.
+    let mut s = Value::Null;
+    for _ in 0..50 {
+        s = t
+            .call(
+                Method::GET,
+                "/api/v1/apps/st/stats?counts=exact",
+                None,
+                true,
+            )
+            .await
+            .body;
+        if s["traffic"]["total"]["deletes"] == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let tot = &s["traffic"]["total"];
+    assert_eq!(tot["reads"], 2, "{s}");
+    assert_eq!(tot["writes"], 4, "{s}");
+    assert_eq!(
+        (tot["creates"].clone(), tot["deletes"].clone()),
+        (json!(3), json!(1))
+    );
+    assert_eq!(tot["errors4xx"], 1);
+    assert!(tot["bytesOut"].as_u64().unwrap() > 0);
+    assert_eq!(s["traffic"]["minutes"].as_array().unwrap().len(), 60);
+    assert_eq!(s["traffic"]["hours"].as_array().unwrap().len(), 48);
+    let c = &s["collections"][0];
+    assert_eq!(
+        (c["name"].clone(), c["records"].clone()),
+        (json!("notes"), json!(2))
+    );
+    assert_eq!(
+        (
+            c["reads"].clone(),
+            c["creates"].clone(),
+            c["deletes"].clone()
+        ),
+        (json!(1), json!(3), json!(1))
+    );
+    assert!(s["store"]["commits"].as_u64().unwrap() >= 4);
+    assert!(s["dbBytes"].as_u64().unwrap() > 0);
+
+    let r = t
+        .call(Method::GET, "/api/v1/apps/st/stats?counts=nope", None, true)
+        .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+
+    let g = t
+        .call(Method::GET, "/api/v1/system/stats", None, true)
+        .await
+        .body;
+    assert_eq!(g["appsTotal"], 1);
+    assert_eq!(g["apps"][0]["name"], "st");
+    assert_eq!(g["apps"][0]["traffic"]["writes"], 4);
+    assert_eq!(g["traffic"]["total"]["creates"], 3);
+    assert!(g["traffic"]["total"]["requests"].as_u64().unwrap() >= 8);
+}

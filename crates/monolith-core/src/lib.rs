@@ -6,6 +6,7 @@ pub mod ddl;
 pub mod debug;
 pub mod error;
 pub mod list;
+pub mod metrics;
 pub mod schema;
 pub mod system;
 
@@ -14,6 +15,7 @@ pub use app::{
 };
 pub use debug::{ExplainQueryReq, ExplainQueryResp, ExplainRuleReq, ExplainRuleResp, RequestLog};
 pub use error::{CoreError, CoreResult, FieldError};
+pub use metrics::{Metrics, ReqKind};
 pub use monolith_rules::Auth;
 pub use monolith_store::Value;
 pub use schema::{Collection, CollectionDef, Schema};

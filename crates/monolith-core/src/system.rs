@@ -15,6 +15,7 @@ use monolith_store::{
 
 use crate::app::{App, now_us};
 use crate::error::{CoreError, CoreResult};
+use crate::metrics::Metrics;
 use crate::schema::valid_name;
 
 pub const SUPERUSER_TOKEN_TTL_US: i64 = 3600 * 1_000_000;
@@ -46,6 +47,8 @@ pub struct Registry {
     dummy_hash: String,
     /// One-time installer token `(token, expires µs)`, memory only (doc 18 §2).
     install: tokio::sync::Mutex<Option<(String, i64)>>,
+    /// All HTTP traffic plus every app's record ops (in memory, since start).
+    pub metrics: Arc<Metrics>,
 }
 
 fn ct_eq(a: &[u8], b: &[u8]) -> bool {
@@ -125,10 +128,11 @@ impl Registry {
             token_key: token_key.to_vec(),
             dummy_hash,
             install: tokio::sync::Mutex::new(None),
+            metrics: Arc::new(Metrics::new()),
         })
     }
 
-    fn app_dir(&self, name: &str) -> PathBuf {
+    pub(crate) fn app_dir(&self, name: &str) -> PathBuf {
         self.dir.join("apps").join(name)
     }
 
@@ -229,7 +233,7 @@ impl Registry {
         .await
         .map_err(blocking_err)?
         .map_err(|e| CoreError::Internal(e.to_string()))?;
-        let app = Arc::new(App::open(name, &dir.join("data.db")).await?);
+        let app = Arc::new(App::open(name, &dir.join("data.db"), self.metrics.clone()).await?);
         self.apps
             .write()
             .unwrap_or_else(|e| e.into_inner())

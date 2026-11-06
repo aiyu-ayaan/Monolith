@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,6 +19,7 @@ use crate::ddl::{self, sql_str};
 use crate::debug::RequestLog;
 use crate::error::{CoreError, CoreResult};
 use crate::list::{self, ListPlan};
+use crate::metrics::{Metrics, spawn_change_counter};
 use crate::schema::{Collection, CollectionDef, FieldType, Schema};
 
 pub const MAX_LIMIT: usize = 1000;
@@ -137,6 +138,8 @@ pub struct App {
     // shortcut: cleared when full instead of LRU; fine until profiles say otherwise.
     plans: Mutex<HashMap<PlanKey, Arc<ListPlan>>>,
     pub(crate) logs: Mutex<VecDeque<RequestLog>>,
+    pub metrics: Arc<Metrics>,
+    pub(crate) db_path: PathBuf,
 }
 
 fn rule_ref<'a>(
@@ -261,8 +264,9 @@ fn check_client_id(id: &Id, now: i64) -> CoreResult<()> {
 }
 
 impl App {
-    /// Opens (or creates) the app database at `path` and loads its schema.
-    pub async fn open(name: &str, path: &Path) -> CoreResult<App> {
+    /// Opens (or creates) the app database at `path` and loads its schema. Record ops
+    /// are counted into the app's metrics and into `global`.
+    pub async fn open(name: &str, path: &Path, global: Arc<Metrics>) -> CoreResult<App> {
         let p = path.to_owned();
         let store =
             tokio::task::spawn_blocking(move || SqliteStore::open(&p, &SqliteConfig::default()))
@@ -302,6 +306,8 @@ impl App {
             defs.insert(name.to_string(), (*cid as u32, def));
         }
         let schema = Schema::build(version, defs)?;
+        let metrics = Arc::new(Metrics::new());
+        spawn_change_counter(store.subscribe(), [metrics.clone(), global]);
         Ok(App {
             name: name.to_owned(),
             store,
@@ -309,6 +315,8 @@ impl App {
             schema_lock: tokio::sync::Mutex::new(()),
             plans: Mutex::new(HashMap::new()),
             logs: Mutex::new(VecDeque::new()),
+            metrics,
+            db_path: path.to_owned(),
         })
     }
 

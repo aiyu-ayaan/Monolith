@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::Router;
-use axum::body::Bytes;
+use axum::body::{Bytes, HttpBody};
 use axum::extract::rejection::BytesRejection;
 use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -16,7 +16,8 @@ use monolith_core::app::now_us;
 use monolith_core::codec::format_us;
 use monolith_core::{
     AppInfo, Auth, BatchItem, BatchKind, CollectionDef, CoreError, ExplainQueryReq, ExplainRuleReq,
-    ListParams, Principal, ReadOpts, RecordOut, Registry, RequestLog, TotalMode, Value, WriteOpts,
+    ListParams, Principal, ReadOpts, RecordOut, Registry, ReqKind, RequestLog, TotalMode, Value,
+    WriteOpts,
 };
 use monolith_store::id::{decode as decode_id, encode_string, new_id};
 use serde::Deserialize;
@@ -145,7 +146,24 @@ fn valid_request_id(s: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
 }
 
+/// Classifies `rest` (path after `/api/v1/apps/{app}/`) → kind + collection for metrics.
+fn classify<'a>(method: &axum::http::Method, rest: &'a str) -> (ReqKind, Option<&'a str>) {
+    let mut seg = rest.split('/');
+    let first = seg.next().unwrap_or("");
+    let coll = match (first, seg.next(), seg.next()) {
+        ("collections", Some(c), Some(r)) if r.starts_with("records") => c,
+        ("batch", None, None) => return (ReqKind::Write, None),
+        _ => return (ReqKind::Other, None),
+    };
+    let read = matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
+    (
+        if read { ReqKind::Read } else { ReqKind::Write },
+        Some(coll),
+    )
+}
+
 /// Echoes a valid client `X-Request-Id` or mints one; problem bodies carry it too.
+/// Also feeds the request trace ring buffer and the traffic metrics.
 async fn request_id(State(reg): St, req: Request, next: Next) -> Response {
     let rid = req
         .headers()
@@ -160,13 +178,45 @@ async fn request_id(State(reg): St, req: Request, next: Next) -> Response {
         .and_then(|s| s.split('/').next())
         .filter(|s| !s.is_empty())
         .map(str::to_owned);
-    let ts = format_us(now_us());
+    let bytes_in = req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
+        .unwrap_or(0);
+    let now = now_us();
+    let ts = format_us(now);
     let start = Instant::now();
     let mut res = REQUEST_ID.scope(rid.clone(), next.run(req)).await;
     let duration_us = start.elapsed().as_micros() as u64;
     let status = res.status().as_u16();
     tracing::debug!(request_id = %rid, %method, %path, status, us = duration_us);
+    let bytes_out = res.body().size_hint().exact().unwrap_or(0);
+    let rest = app_name
+        .as_deref()
+        .and_then(|a| {
+            path.strip_prefix("/api/v1/apps/")?
+                .strip_prefix(a)?
+                .strip_prefix('/')
+        })
+        .unwrap_or("");
+    let (kind, coll) = classify(&method, rest);
+    // The stats endpoints are polled by the admin UI; counting them would drown real traffic.
+    let counted = !path.ends_with("/stats");
+    if counted {
+        reg.metrics
+            .record_request(now, kind, status, duration_us, bytes_in, bytes_out);
+    }
     if let Some(app) = app_name.as_deref().and_then(|n| reg.loaded_app(n)) {
+        if counted {
+            app.metrics
+                .record_request(now, kind, status, duration_us, bytes_in, bytes_out);
+            if kind == ReqKind::Read
+                && status < 400
+                && let Some(c) = coll.and_then(|c| app.schema().get(c).ok().map(|c| c.cid))
+            {
+                app.metrics.record_coll_read(c);
+            }
+        }
         let error = res.extensions().get::<ErrorDetail>().map(|e| e.0.clone());
         app.record_log(RequestLog {
             request_id: rid.clone(),
@@ -247,6 +297,8 @@ pub fn router(reg: Arc<Registry>) -> Router {
         .route("/api/v1/apps/{app}/query:explain", post(explain_query))
         .route("/api/v1/apps/{app}/logs", get(list_logs))
         .route("/api/v1/apps/{app}/logs/slow", get(list_slow_logs))
+        .route("/api/v1/apps/{app}/stats", get(app_stats))
+        .route("/api/v1/system/stats", get(system_stats))
         .route(
             "/_",
             get(|| async { axum::response::Redirect::permanent("/_/") }),
@@ -865,6 +917,30 @@ async fn list_slow_logs(
     };
     let items = reg.app(&app).await?.slow_logs(limit);
     Ok(axum::Json(json!({"items": items})).into_response())
+}
+
+async fn system_stats(State(reg): St, headers: HeaderMap) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(reg.system_stats().await?).into_response())
+}
+
+async fn app_stats(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let exact = match q.get("counts").map(String::as_str) {
+        None | Some("estimate") => false,
+        Some("exact") => true,
+        Some(_) => {
+            return Err(ApiError(CoreError::BadRequest(
+                "counts must be estimate or exact".into(),
+            )));
+        }
+    };
+    Ok(axum::Json(reg.app(&app).await?.stats(exact).await?).into_response())
 }
 
 // ---------- admin UI (doc 15 §4) ----------
