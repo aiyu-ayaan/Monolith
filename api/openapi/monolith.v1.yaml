@@ -700,6 +700,40 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/RequestLog" }
 
+  /api/v1/system/stats:
+    get:
+      operationId: systemStats
+      description: |
+        Server-wide traffic and resource stats (superuser). In-memory since `since`
+        (server start); per-minute buckets for the last hour, per-hour for the last 48 h.
+      responses:
+        "200":
+          description: Global stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SystemStats" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/stats:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: appStats
+      description: Per-app traffic, record operations, store internals, storage and per-collection counters (superuser).
+      parameters:
+        - name: counts
+          in: query
+          schema: { type: string, enum: [estimate, exact], default: estimate }
+          description: "`exact` runs COUNT(*) per collection; `estimate` reads sqlite_stat1 (null when unknown)."
+      responses:
+        "200":
+          description: App stats
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppStats" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -840,3 +874,118 @@ components:
         durationUs: { type: integer }
         superuser: { type: boolean }
         error: { type: [string, "null"] }
+
+    Traffic:
+      type: object
+      description: |
+        Request counters. `reads`/`writes` count record API requests (GET vs. other methods,
+        batch included). `creates`/`updates`/`deletes` count committed record changes from
+        the change bus (one batch request can make many). Latency percentiles are
+        approximate (log2 histogram bucket upper bound).
+      required: [requests, reads, writes, creates, updates, deletes, errors4xx, errors5xx, bytesIn, bytesOut, avgUs, maxUs, p50Us, p95Us, p99Us]
+      properties:
+        requests: { type: integer }
+        reads: { type: integer }
+        writes: { type: integer }
+        creates: { type: integer }
+        updates: { type: integer }
+        deletes: { type: integer }
+        errors4xx: { type: integer }
+        errors5xx: { type: integer }
+        bytesIn: { type: integer }
+        bytesOut: { type: integer }
+        avgUs: { type: integer }
+        maxUs: { type: integer }
+        p50Us: { type: integer }
+        p95Us: { type: integer }
+        p99Us: { type: integer }
+
+    TrafficPoint:
+      allOf:
+        - $ref: "#/components/schemas/Traffic"
+        - type: object
+          required: [t]
+          properties:
+            t: { type: integer, description: Bucket start, unix seconds }
+
+    TrafficSeries:
+      type: object
+      required: [total, lastHour, minutes, hours]
+      properties:
+        total: { $ref: "#/components/schemas/Traffic" }
+        lastHour: { $ref: "#/components/schemas/Traffic" }
+        minutes:
+          type: array
+          description: 60 per-minute buckets, oldest first
+          items: { $ref: "#/components/schemas/TrafficPoint" }
+        hours:
+          type: array
+          description: 48 per-hour buckets, oldest first
+          items: { $ref: "#/components/schemas/TrafficPoint" }
+
+    SystemStats:
+      type: object
+      required: [since, uptimeS, memoryBytes, appsTotal, appsLoaded, traffic, apps]
+      properties:
+        since: { type: string, format: date-time }
+        uptimeS: { type: integer }
+        memoryBytes: { type: [integer, "null"], description: Resident set size; null where unsupported }
+        appsTotal: { type: integer }
+        appsLoaded: { type: integer }
+        traffic: { $ref: "#/components/schemas/TrafficSeries" }
+        apps:
+          type: array
+          items:
+            type: object
+            required: [name, loaded, dbBytes, walBytes, traffic]
+            properties:
+              name: { $ref: "#/components/schemas/Name" }
+              loaded: { type: boolean }
+              dbBytes: { type: integer }
+              walBytes: { type: integer }
+              traffic:
+                description: Totals since start; null while the app is not loaded
+                oneOf: [{ $ref: "#/components/schemas/Traffic" }, { type: "null" }]
+
+    StoreStats:
+      type: object
+      description: Engine internals since the app was opened.
+      required: [commits, ops, opsFailed, mutations, maxBatch, commitAvgUs, commitMaxUs, reads, readAvgUs, busy, writerQueue, readerQueue, readers]
+      properties:
+        commits: { type: integer, description: Group-commit transactions }
+        ops: { type: integer, description: Write ops (requests) handled by the writer }
+        opsFailed: { type: integer }
+        mutations: { type: integer, description: Committed row changes (seq values) }
+        maxBatch: { type: integer, description: Largest group commit seen }
+        commitAvgUs: { type: integer }
+        commitMaxUs: { type: integer }
+        reads: { type: integer, description: Read jobs run on the reader pool }
+        readAvgUs: { type: integer }
+        busy: { type: integer, description: Requests rejected because a queue was full (503) }
+        writerQueue: { type: integer, description: Current writer queue depth }
+        readerQueue: { type: integer, description: Current reader queue depth }
+        readers: { type: integer }
+
+    AppStats:
+      type: object
+      required: [app, since, schemaVersion, traffic, store, dbBytes, walBytes, collections]
+      properties:
+        app: { $ref: "#/components/schemas/Name" }
+        since: { type: string, format: date-time, description: When the app was loaded }
+        schemaVersion: { type: integer }
+        traffic: { $ref: "#/components/schemas/TrafficSeries" }
+        store: { $ref: "#/components/schemas/StoreStats" }
+        dbBytes: { type: integer }
+        walBytes: { type: integer }
+        collections:
+          type: array
+          items:
+            type: object
+            required: [name, records, reads, creates, updates, deletes]
+            properties:
+              name: { $ref: "#/components/schemas/Name" }
+              records: { type: [integer, "null"] }
+              reads: { type: integer }
+              creates: { type: integer }
+              updates: { type: integer }
+              deletes: { type: integer }
