@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = ["crates/monolith-store"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+monolith-store = { path = "crates/monolith-store" }
+rusqlite = { version = "0.41", features = ["bundled"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+crossbeam-channel = "0.5"
+thiserror = "2"
+uuid = { version = "1", features = ["v7"] }
+criterion = { version = "0.8", features = ["async_tokio"] }
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Doc 16 §2 Build: unwinding stays on, the writer restart and panic catching need it.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+
+[profile.bench]
+inherits = "release"

@@ -1,0 +1,25 @@
+[package]
+name = "monolith-store"
+description = "AppStore trait and the SQLite engine: writer thread with group commit, reader pool, change log"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rusqlite.workspace = true
+tokio.workspace = true
+crossbeam-channel.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "store"
+harness = false
+
+[lints]
+workspace = true
