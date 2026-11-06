@@ -98,7 +98,8 @@ REST and WebSocket must stay complete without an SDK.
 ```bash
 # JS/TS workspace
 pnpm setup                            # or `pnpm install` — initialises all JS/TS projects
-pnpm dev:ui                           # admin UI dev server
+pnpm dev:ui                           # admin UI dev server (proxies /api to :8090)
+pnpm typecheck:ui                     # tsc --noEmit for the admin UI
 pnpm build                            # builds all JS/TS workspace projects
 pnpm test                             # runs tests across JS/TS packages
 

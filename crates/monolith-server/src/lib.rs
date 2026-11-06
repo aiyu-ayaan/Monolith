@@ -188,6 +188,12 @@ pub fn router(reg: Arc<Registry>) -> Router {
             get(view_record).patch(update_record).delete(delete_record),
         )
         .route("/api/v1/apps/{app}/batch", post(batch))
+        .route(
+            "/_",
+            get(|| async { axum::response::Redirect::permanent("/_/") }),
+        )
+        .route("/_/", get(|| ui_asset(Path(String::new()))))
+        .route("/_/{*path}", get(ui_asset))
         .fallback(|| async { ApiError(CoreError::NotFound("route")) })
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .layer(middleware::from_fn(request_id))
@@ -479,4 +485,44 @@ async fn batch(
         .map(|id| json!({"id": encode_string(id)}))
         .collect();
     Ok(axum::Json(json!({"results": results})).into_response())
+}
+
+// ---------- admin UI (doc 15 §4) ----------
+
+/// `ui/dist`, embedded in release builds and read from disk in debug builds.
+// shortcut: served uncompressed; doc 15 wants brotli/gzip precompressed at build time.
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../../ui/dist"]
+#[allow_missing = true]
+struct UiAssets;
+
+async fn ui_asset(Path(path): Path<String>) -> Response {
+    let path = if path.is_empty() {
+        "index.html"
+    } else {
+        path.as_str()
+    };
+    let Some(file) = UiAssets::get(path) else {
+        let msg = if UiAssets::get("index.html").is_none() {
+            "admin UI not built: run `pnpm build:ui` and rebuild the server"
+        } else {
+            "no such UI asset"
+        };
+        return (StatusCode::NOT_FOUND, msg).into_response();
+    };
+    // Vite hashes asset names, so they never change; index.html must always revalidate.
+    let cache = if path.starts_with("assets/") {
+        "public, max-age=31536000, immutable"
+    } else {
+        "no-cache"
+    };
+    let mime = file.metadata.mimetype().to_owned();
+    (
+        [
+            (header::CONTENT_TYPE, mime),
+            (header::CACHE_CONTROL, cache.to_owned()),
+        ],
+        file.data.into_owned(),
+    )
+        .into_response()
 }

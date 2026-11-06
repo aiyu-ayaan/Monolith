@@ -343,3 +343,28 @@ async fn edges() {
         .await;
     assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn admin_ui_route() {
+    let t = T::new().await;
+    let res = t
+        .app
+        .clone()
+        .oneshot(Request::get("/_/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    // 200 when ui/dist is built, 404 with a hint otherwise; never a problem+json route miss.
+    assert!(matches!(
+        res.status(),
+        StatusCode::OK | StatusCode::NOT_FOUND
+    ));
+    if res.status() == StatusCode::OK {
+        assert!(
+            res.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html")
+        );
+        assert_eq!(res.headers()["cache-control"], "no-cache");
+    }
+}

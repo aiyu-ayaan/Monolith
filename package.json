@@ -24,6 +24,7 @@
     "rust:deny": "cargo deny check",
     "bench:engine": "cargo run --release -p monolith-bench --",
     "server:dev": "cargo run -p monolith-server",
-    "server:release": "cargo run --release -p monolith-server"
+    "server:release": "cargo run --release -p monolith-server",
+    "typecheck:ui": "pnpm --filter @monolith/ui typecheck"
   }
 }
