@@ -6,6 +6,7 @@ use crate::parse::{self, CmpOp, Expr, Lit, Modifier, Operand};
 use crate::{Class, Ctx, FieldKind, Mode, RuleError, SchemaView, Ty, Value};
 
 pub const MAX_HOPS: usize = 4;
+pub const MAX_COLLECTION_JOINS: usize = 4;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Source {
@@ -25,11 +26,36 @@ pub(crate) struct Param {
     pub like: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Root {
+    /// The queried collection (`t`).
+    Main,
+    /// `@collection` join binding index `k` (`c{k + 1}`).
+    Join(usize),
+}
+
+impl Root {
+    fn alias(self) -> String {
+        match self {
+            Root::Main => "t".to_owned(),
+            Root::Join(k) => format!("c{}", k + 1),
+        }
+    }
+
+    fn mask(self) -> u8 {
+        match self {
+            Root::Main => 0,
+            Root::Join(k) => 1 << k,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Term {
-    /// `depth` 0 is the queried table (alias `t`), n is relation hop `rn` (or `j{n}` for a
+    /// `depth` 0 is the root table (`t` or `c{k}`), n is relation hop `rn` (or `j{n}` for a
     /// bare junction hop).
     Col {
+        root: Root,
         depth: usize,
         junction: bool,
         column: String,
@@ -42,6 +68,15 @@ pub(crate) enum Term {
     },
 }
 
+impl Term {
+    fn join_mask(&self) -> u8 {
+        match self {
+            Term::Col { root, .. } => root.mask(),
+            Term::Param { .. } => 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Hop {
     /// Single-relation hop: `table` (`r{n}`) joined via `via` on the previous alias.
@@ -50,6 +85,39 @@ pub(crate) enum Hop {
     Multi { junction: String, table: String },
     /// Bare multi-relation hop (`tags ?= 'id'`): `junction` (`j{n}`) only, comparing `j{n}."target"`.
     Junction { junction: String },
+    /// Back-relation hop over a single-relation field (`comments_via_post`):
+    /// `table` (`r{n}`) where `r{n}."{via}" = {prev}."id"`.
+    BackSingle {
+        via: String,
+        table: String,
+        bare: bool,
+    },
+    /// Back-relation hop over a multi-relation field (`articles_via_tags.title`):
+    /// `junction` (`j{n}`) where `j{n}."target" = {prev}."id"` + `table` (`r{n}`) on `r{n}."id" = j{n}."owner"`.
+    BackMulti { junction: String, table: String },
+    /// Bare back-relation hop over a multi-relation field (`articles_via_tags ?= 'id'`):
+    /// `junction` (`j{n}`) where `j{n}."target" = {prev}."id"`, comparing `j{n}."owner"`.
+    BackJunction { junction: String },
+}
+
+impl Hop {
+    fn is_multi(&self) -> bool {
+        matches!(
+            self,
+            Hop::Multi { .. }
+                | Hop::Junction { .. }
+                | Hop::BackSingle { .. }
+                | Hop::BackMulti { .. }
+                | Hop::BackJunction { .. }
+        )
+    }
+
+    fn is_bare_multi(&self) -> bool {
+        matches!(
+            self,
+            Hop::Junction { .. } | Hop::BackJunction { .. } | Hop::BackSingle { bare: true, .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,13 +130,30 @@ pub(crate) enum Node {
         op: CmpOp,
         any: bool,
         r: Term,
+        hop_root: Root,
         hops: Vec<Hop>,
     },
     In {
         l: Term,
         list: Vec<Term>,
+        hop_root: Root,
         hops: Vec<Hop>,
     },
+}
+
+impl Node {
+    fn join_mask(&self) -> u8 {
+        match self {
+            Node::True => 0,
+            Node::And(a, b) | Node::Or(a, b) => a.join_mask() | b.join_mask(),
+            Node::Cmp { l, r, hop_root, .. } => l.join_mask() | r.join_mask() | hop_root.mask(),
+            Node::In {
+                l, list, hop_root, ..
+            } => list
+                .iter()
+                .fold(l.join_mask() | hop_root.mask(), |m, t| m | t.join_mask()),
+        }
+    }
 }
 
 /// A compiled rule or filter for one (schema version, collection).
@@ -102,12 +187,13 @@ pub fn compile(
         collection,
         mode,
         params: vec![],
+        joins: vec![],
         class: Class::Const,
     };
     let mut node = c.expr(&ast)?;
     let mut sql = String::with_capacity(src.len() * 2);
     let mut order = Vec::with_capacity(c.params.len());
-    emit(&node, &c.params, &mut order, &mut sql);
+    emit(&node, &c.joins, 0, &c.params, &mut order, &mut sql);
     // Renumber params into SQL text order so `bind()` matches the anonymous `?`s.
     let mut pos = vec![0; c.params.len()];
     for (new, &old) in order.iter().enumerate() {
@@ -132,7 +218,7 @@ impl Compiled {
 
 /// An operand before type unification.
 enum Pre {
-    Typed(Term, Ty, Vec<Hop>),
+    Typed(Term, Ty, Root, Vec<Hop>),
     /// Literal or claim: takes the other side's type.
     Flex(Source, bool),
 }
@@ -142,6 +228,8 @@ struct Checker<'a> {
     collection: &'a str,
     mode: Mode,
     params: Vec<Param>,
+    /// Distinct `@collection.<table>(:<alias>)?` bindings: `(alias_key, table_name)`.
+    joins: Vec<(String, String)>,
     class: Class,
 }
 
@@ -169,10 +257,10 @@ impl Checker<'_> {
             ));
         }
         let ty = match (&l, &r) {
-            (Pre::Typed(_, a, _), Pre::Typed(_, b, _)) if a != b => {
+            (Pre::Typed(_, a, ..), Pre::Typed(_, b, ..)) if a != b => {
                 return Err(RuleError::Type(format!("cannot compare {a:?} with {b:?}")));
             }
-            (Pre::Typed(_, t, _), _) | (_, Pre::Typed(_, t, _)) => *t,
+            (Pre::Typed(_, t, ..), _) | (_, Pre::Typed(_, t, ..)) => *t,
             (Pre::Flex(Source::Lit(v), _), _) | (_, Pre::Flex(Source::Lit(v), _)) => lit_ty(v)?,
             _ => {
                 return Err(RuleError::Type(
@@ -182,13 +270,12 @@ impl Checker<'_> {
         };
         check_op(op, ty)?;
         let like = matches!(op, CmpOp::Like | CmpOp::NotLike);
-        let (l, lh) = self.finish(l, ty, false)?;
-        let (r, rh) = self.finish(r, ty, like)?;
-        let hops = self.one_path(lh, rh)?;
-        let has_multi = hops
-            .iter()
-            .any(|h| matches!(h, Hop::Multi { .. } | Hop::Junction { .. }));
-        if any && !has_multi {
+        let (l, lroot, lh) = self.finish(l, ty, false)?;
+        let (r, rroot, rh) = self.finish(r, ty, like)?;
+        let (hop_root, hops) = self.one_path((lroot, lh), (rroot, rh))?;
+        let has_multi = hops.iter().any(Hop::is_multi);
+        let has_join = (l.join_mask() | r.join_mask() | hop_root.mask()) != 0;
+        if any && !has_multi && !has_join {
             return Err(RuleError::Type(
                 "any-of operators (?=) require a multi-relation field".into(),
             ));
@@ -203,33 +290,34 @@ impl Checker<'_> {
             op,
             any,
             r,
+            hop_root,
             hops,
         })
     }
 
     fn in_list(&mut self, l: &Operand, list: &[Operand]) -> Result<Node, RuleError> {
         let l = self.operand(l)?;
-        let Pre::Typed(_, ty, _) = &l else {
+        let Pre::Typed(_, ty, ..) = &l else {
             return Err(RuleError::Type(
                 "the left side of 'in' must be a field or typed value".into(),
             ));
         };
         let ty = *ty;
-        let (l, hops) = self.finish(l, ty, false)?;
+        let (l, hop_root, hops) = self.finish(l, ty, false)?;
         let mut terms = Vec::with_capacity(list.len());
         for o in list {
             let pre = self.operand(o)?;
             if !matches!(pre, Pre::Flex(..) | Pre::Typed(Term::Param { .. }, ..)) {
                 return Err(RuleError::Unsupported("'in' lists hold values, not fields"));
             }
-            if let Pre::Typed(_, t, _) = &pre
+            if let Pre::Typed(_, t, ..) = &pre
                 && *t != ty
             {
                 return Err(RuleError::Type(format!(
                     "'in' list item is {t:?}, expected {ty:?}"
                 )));
             }
-            let (t, _) = self.finish(pre, ty, false)?;
+            let (t, _, _) = self.finish(pre, ty, false)?;
             if is_null(&t, &self.params) {
                 return Err(RuleError::Type("null is not allowed in 'in' lists".into()));
             }
@@ -238,14 +326,19 @@ impl Checker<'_> {
         Ok(Node::In {
             l,
             list: terms,
+            hop_root,
             hops,
         })
     }
 
-    fn one_path(&self, a: Vec<Hop>, b: Vec<Hop>) -> Result<Vec<Hop>, RuleError> {
+    fn one_path(
+        &self,
+        (ar, a): (Root, Vec<Hop>),
+        (br, b): (Root, Vec<Hop>),
+    ) -> Result<(Root, Vec<Hop>), RuleError> {
         match (a.is_empty(), b.is_empty()) {
-            (_, true) => Ok(a),
-            (true, false) => Ok(b),
+            (_, true) => Ok((ar, a)),
+            (true, false) => Ok((br, b)),
             _ => Err(RuleError::Unsupported(
                 "relation paths on both sides of one comparison",
             )),
@@ -253,13 +346,13 @@ impl Checker<'_> {
     }
 
     /// Turns a pre-operand into a term of type `ty`, converting literals.
-    fn finish(&mut self, p: Pre, ty: Ty, like: bool) -> Result<(Term, Vec<Hop>), RuleError> {
+    fn finish(&mut self, p: Pre, ty: Ty, like: bool) -> Result<(Term, Root, Vec<Hop>), RuleError> {
         match p {
-            Pre::Typed(Term::Param { idx, lower }, _, hops) => {
+            Pre::Typed(Term::Param { idx, lower }, _, root, hops) => {
                 self.params[idx].like = like;
-                Ok((Term::Param { idx, lower }, hops))
+                Ok((Term::Param { idx, lower }, root, hops))
             }
-            Pre::Typed(t, _, hops) => Ok((t, hops)),
+            Pre::Typed(t, _, root, hops) => Ok((t, root, hops)),
             Pre::Flex(src, lower) => {
                 let src = match src {
                     Source::Lit(v) => Source::Lit(convert_lit(v, ty)?),
@@ -274,6 +367,7 @@ impl Checker<'_> {
                         idx: self.params.len() - 1,
                         lower,
                     },
+                    Root::Main,
                     vec![],
                 ))
             }
@@ -312,22 +406,31 @@ impl Checker<'_> {
                     lower,
                 },
                 ty,
+                Root::Main,
                 vec![],
             ))
         };
         let p: Vec<&str> = parts.iter().map(String::as_str).collect();
-        if p[0].starts_with('@') {
-            self.see(Class::AuthOnly);
-            return match p.as_slice() {
-                ["@now"] => typed_param(self, Source::Now, Ty::Date),
-                ["@request", "auth", "id"] => typed_param(self, Source::AuthId, Ty::Id),
+        let (root, start_coll, field_segs) = if p[0].starts_with('@') {
+            match p.as_slice() {
+                ["@now"] => {
+                    self.see(Class::AuthOnly);
+                    return typed_param(self, Source::Now, Ty::Date);
+                }
+                ["@request", "auth", "id"] => {
+                    self.see(Class::AuthOnly);
+                    return typed_param(self, Source::AuthId, Ty::Id);
+                }
                 ["@request", "auth", "collectionName"] => {
-                    typed_param(self, Source::AuthCollection, Ty::Text)
+                    self.see(Class::AuthOnly);
+                    return typed_param(self, Source::AuthCollection, Ty::Text);
                 }
                 ["@request", "auth", claim] => {
-                    Ok(Pre::Flex(Source::AuthClaim((*claim).into()), lower))
+                    self.see(Class::AuthOnly);
+                    return Ok(Pre::Flex(Source::AuthClaim((*claim).into()), lower));
                 }
                 ["@request", "body", name] => {
+                    self.see(Class::AuthOnly);
                     let f = self
                         .schema
                         .field(self.collection, name)
@@ -337,82 +440,160 @@ impl Checker<'_> {
                             "@request.body on multi-relation fields",
                         ));
                     }
-                    typed_param(self, Source::Body(f.slot), kind_ty(&f.kind))
+                    return typed_param(self, Source::Body(f.slot), kind_ty(&f.kind));
                 }
-                ["@collection", ..] => {
-                    Err(RuleError::Unsupported("@collection joins (next stage)"))
+                ["@collection", raw_coll, rest @ ..] if !rest.is_empty() => {
+                    let (coll_name, alias_key) = match raw_coll.split_once(':') {
+                        Some((c, a)) if !c.is_empty() && !a.is_empty() => (c, format!("{c}:{a}")),
+                        Some(_) => return Err(RuleError::UnknownField(parts.join("."))),
+                        None => (*raw_coll, (*raw_coll).to_owned()),
+                    };
+                    if self.schema.field(coll_name, "id").is_none() {
+                        return Err(RuleError::UnknownField(parts.join(".")));
+                    }
+                    self.see(Class::Relational);
+                    let join_idx = match self.joins.iter().position(|(k, _)| k == &alias_key) {
+                        Some(idx) => idx,
+                        None => {
+                            if self.joins.len() >= MAX_COLLECTION_JOINS {
+                                return Err(RuleError::Limit("more than 4 @collection joins"));
+                            }
+                            self.joins.push((alias_key, coll_name.to_owned()));
+                            self.joins.len() - 1
+                        }
+                    };
+                    (Root::Join(join_idx), coll_name.to_owned(), rest)
                 }
-                _ => Err(RuleError::UnknownField(parts.join("."))),
-            };
-        }
-        if p.len() > MAX_HOPS + 1 {
+                _ => return Err(RuleError::UnknownField(parts.join("."))),
+            }
+        } else {
+            (Root::Main, self.collection.to_owned(), p.as_slice())
+        };
+
+        if field_segs.len() > MAX_HOPS + 1 {
             return Err(RuleError::Limit("more than 4 relation hops"));
         }
-        let mut coll = self.collection.to_owned();
+        let mut coll = start_coll;
         let mut hops = Vec::new();
-        for (i, name) in p.iter().enumerate() {
-            let f = self
-                .schema
-                .field(&coll, name)
-                .ok_or_else(|| RuleError::UnknownField(parts[..=i].join(".")))?;
-            if f.hidden && self.mode == Mode::Filter {
-                return Err(RuleError::UnknownField(parts[..=i].join(".")));
-            }
-            let last = i + 1 == p.len();
-            match (&f.kind, last) {
-                (FieldKind::Relation { multi: true, .. }, true) => {
+        for (i, name) in field_segs.iter().enumerate() {
+            let last = i + 1 == field_segs.len();
+            if let Some(f) = self.schema.field(&coll, name) {
+                if f.hidden && self.mode == Mode::Filter {
+                    return Err(RuleError::UnknownField(parts.join(".")));
+                }
+                match (&f.kind, last) {
+                    (FieldKind::Relation { multi: true, .. }, true) => {
+                        if lower {
+                            return Err(RuleError::Type(":lower only applies to text".into()));
+                        }
+                        self.see(Class::Relational);
+                        hops.push(Hop::Junction {
+                            junction: format!("_rel_{coll}_{name}"),
+                        });
+                        let col = Term::Col {
+                            root,
+                            depth: hops.len(),
+                            junction: true,
+                            column: "target".to_owned(),
+                            slot: f.slot,
+                            lower: false,
+                        };
+                        return Ok(Pre::Typed(col, Ty::Id, root, hops));
+                    }
+                    (kind, true) => {
+                        let ty = kind_ty(kind);
+                        if lower && ty != Ty::Text {
+                            return Err(RuleError::Type(":lower only applies to text".into()));
+                        }
+                        self.see(if hops.is_empty() && root == Root::Main {
+                            Class::RowLocal
+                        } else {
+                            Class::Relational
+                        });
+                        let col = Term::Col {
+                            root,
+                            depth: hops.len(),
+                            junction: false,
+                            column: (*name).to_owned(),
+                            slot: f.slot,
+                            lower,
+                        };
+                        return Ok(Pre::Typed(col, ty, root, hops));
+                    }
+                    (FieldKind::Relation { target, multi }, false) => {
+                        if *multi {
+                            hops.push(Hop::Multi {
+                                junction: format!("_rel_{coll}_{name}"),
+                                table: target.clone(),
+                            });
+                        } else {
+                            hops.push(Hop::Single {
+                                via: (*name).to_owned(),
+                                table: target.clone(),
+                            });
+                        }
+                        coll = target.clone();
+                    }
+                    (FieldKind::Scalar(_), false) => {
+                        return Err(RuleError::Type(format!("'{name}' is not a relation")));
+                    }
+                }
+            } else if let Some((src_coll, rel_field)) = name.split_once("_via_")
+                && let Some(f) = self.schema.field(src_coll, rel_field)
+                && let FieldKind::Relation { target, multi } = &f.kind
+                && target == &coll
+                && !(f.hidden && self.mode == Mode::Filter)
+            {
+                self.see(Class::Relational);
+                if last {
                     if lower {
                         return Err(RuleError::Type(":lower only applies to text".into()));
                     }
-                    self.see(Class::Relational);
-                    hops.push(Hop::Junction {
-                        junction: format!("_rel_{coll}_{name}"),
-                    });
-                    let col = Term::Col {
-                        depth: hops.len(),
-                        junction: true,
-                        column: "target".to_owned(),
-                        slot: f.slot,
-                        lower: false,
-                    };
-                    return Ok(Pre::Typed(col, Ty::Id, hops));
-                }
-                (kind, true) => {
-                    let ty = kind_ty(kind);
-                    if lower && ty != Ty::Text {
-                        return Err(RuleError::Type(":lower only applies to text".into()));
-                    }
-                    self.see(if hops.is_empty() {
-                        Class::RowLocal
-                    } else {
-                        Class::Relational
-                    });
-                    let col = Term::Col {
-                        depth: hops.len(),
-                        junction: false,
-                        column: (*name).to_owned(),
-                        slot: f.slot,
-                        lower,
-                    };
-                    return Ok(Pre::Typed(col, ty, hops));
-                }
-                (FieldKind::Relation { target, multi }, false) => {
                     if *multi {
-                        hops.push(Hop::Multi {
-                            junction: format!("_rel_{coll}_{name}"),
-                            table: target.clone(),
+                        hops.push(Hop::BackJunction {
+                            junction: format!("_rel_{src_coll}_{rel_field}"),
                         });
+                        let col = Term::Col {
+                            root,
+                            depth: hops.len(),
+                            junction: true,
+                            column: "owner".to_owned(),
+                            slot: 0,
+                            lower: false,
+                        };
+                        return Ok(Pre::Typed(col, Ty::Id, root, hops));
                     } else {
-                        hops.push(Hop::Single {
-                            via: (*name).to_owned(),
-                            table: target.clone(),
+                        hops.push(Hop::BackSingle {
+                            via: rel_field.to_owned(),
+                            table: src_coll.to_owned(),
+                            bare: true,
                         });
+                        let col = Term::Col {
+                            root,
+                            depth: hops.len(),
+                            junction: false,
+                            column: "id".to_owned(),
+                            slot: 0,
+                            lower: false,
+                        };
+                        return Ok(Pre::Typed(col, Ty::Id, root, hops));
                     }
-                    coll = target.clone();
                 }
-                (FieldKind::Scalar(_), false) => {
-                    return Err(RuleError::Type(format!("'{name}' is not a relation")));
+                if *multi {
+                    hops.push(Hop::BackMulti {
+                        junction: format!("_rel_{src_coll}_{rel_field}"),
+                        table: src_coll.to_owned(),
+                    });
+                } else {
+                    hops.push(Hop::BackSingle {
+                        via: rel_field.to_owned(),
+                        table: src_coll.to_owned(),
+                        bare: false,
+                    });
                 }
+                coll = src_coll.to_owned();
+            } else {
+                return Err(RuleError::UnknownField(parts.join(".")));
             }
         }
         unreachable!("loop returns on the last segment")
@@ -569,18 +750,59 @@ fn emit_cmp(l: &Term, op: CmpOp, r: &Term, order: &mut Vec<usize>, out: &mut Str
     }
 }
 
-fn emit(n: &Node, params: &[Param], order: &mut Vec<usize>, out: &mut String) {
+fn emit(
+    n: &Node,
+    joins: &[(String, String)],
+    open_mask: u8,
+    params: &[Param],
+    order: &mut Vec<usize>,
+    out: &mut String,
+) {
+    let needed = n.join_mask() & !open_mask;
+    let open_here = match n {
+        Node::And(a, b) => needed & a.join_mask() & b.join_mask(),
+        Node::Cmp { .. } | Node::In { .. } => needed,
+        Node::True | Node::Or(..) => 0,
+    };
+    if open_here != 0 {
+        out.push_str("EXISTS (SELECT 1 FROM ");
+        let mut first = true;
+        for (k, (_, table)) in joins.iter().enumerate() {
+            if open_here & (1 << k) != 0 {
+                if !first {
+                    out.push_str(", ");
+                }
+                first = false;
+                let _ = write!(out, "\"{table}\" c{}", k + 1);
+            }
+        }
+        out.push_str(" WHERE ");
+        emit_inner(n, joins, open_mask | open_here, params, order, out);
+        out.push(')');
+    } else {
+        emit_inner(n, joins, open_mask, params, order, out);
+    }
+}
+
+fn emit_inner(
+    n: &Node,
+    joins: &[(String, String)],
+    open_mask: u8,
+    params: &[Param],
+    order: &mut Vec<usize>,
+    out: &mut String,
+) {
     match n {
         Node::True => out.push('1'),
         Node::And(a, b) | Node::Or(a, b) => {
             out.push('(');
-            emit(a, params, order, out);
+            emit(a, joins, open_mask, params, order, out);
             out.push_str(if matches!(n, Node::And(..)) {
                 " AND "
             } else {
                 " OR "
             });
-            emit(b, params, order, out);
+            emit(b, joins, open_mask, params, order, out);
             out.push(')');
         }
         Node::Cmp {
@@ -588,53 +810,63 @@ fn emit(n: &Node, params: &[Param], order: &mut Vec<usize>, out: &mut String) {
             op,
             any,
             r,
+            hop_root,
             hops,
         } => {
-            let has_multi = hops
-                .iter()
-                .any(|h| matches!(h, Hop::Multi { .. } | Hop::Junction { .. }));
-            let bare_junction_null = matches!(hops.last(), Some(Hop::Junction { .. }))
+            let root_alias = hop_root.alias();
+            let has_multi = hops.iter().any(Hop::is_multi);
+            let bare_multi_null = hops.last().is_some_and(Hop::is_bare_multi)
                 && (is_null(l, params) || is_null(r, params));
-            if bare_junction_null {
-                // `tags = null` / `tags = ''` (or `?!=`) tests whether the multi-relation is empty;
+            if bare_multi_null {
+                // `tags = null` / `tags = ''` (or `?!=`) tests whether the multi/back-relation is empty;
                 // `tags != null` / `tags != ''` (or `?=`) tests whether it is non-empty.
                 let want_empty = matches!((op, *any), (CmpOp::Eq, false) | (CmpOp::Ne, true));
                 if want_empty {
                     out.push_str("NOT ");
                 }
-                with_hops(hops, out, |out| out.push('1'));
+                with_hops(&root_alias, hops, out, |out| out.push('1'));
             } else if has_multi && !*any {
                 // Doc 06 §3: on a multi-relation path without `?`, all related rows must
                 // satisfy the condition and the set must be non-empty.
                 out.push('(');
-                with_hops(hops, out, |out| out.push('1'));
+                with_hops(&root_alias, hops, out, |out| out.push('1'));
                 out.push_str(" AND NOT ");
-                with_hops(hops, out, |out| {
+                with_hops(&root_alias, hops, out, |out| {
                     out.push_str("NOT (");
                     emit_cmp(l, *op, r, order, out);
                     out.push_str(" IS TRUE)");
                 });
                 out.push(')');
             } else {
-                with_hops(hops, out, |out| emit_cmp(l, *op, r, order, out));
+                with_hops(&root_alias, hops, out, |out| {
+                    emit_cmp(l, *op, r, order, out)
+                });
             }
         }
-        Node::In { l, list, hops } => with_hops(hops, out, |out| {
-            term(l, order, out);
-            out.push_str(" IN (");
-            for (i, t) in list.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(", ");
+        Node::In {
+            l,
+            list,
+            hop_root,
+            hops,
+        } => {
+            let root_alias = hop_root.alias();
+            with_hops(&root_alias, hops, out, |out| {
+                term(l, order, out);
+                out.push_str(" IN (");
+                for (i, t) in list.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    term(t, order, out);
                 }
-                term(t, order, out);
-            }
-            out.push(')');
-        }),
+                out.push(')');
+            });
+        }
     }
 }
 
 /// Relation paths become one `EXISTS` semi-join, so lists never need DISTINCT.
-fn with_hops(hops: &[Hop], out: &mut String, body: impl FnOnce(&mut String)) {
+fn with_hops(root_alias: &str, hops: &[Hop], out: &mut String, body: impl FnOnce(&mut String)) {
     if hops.is_empty() {
         return body(out);
     }
@@ -642,7 +874,7 @@ fn with_hops(hops: &[Hop], out: &mut String, body: impl FnOnce(&mut String)) {
     for (i, h) in hops.iter().enumerate() {
         let n = i + 1;
         let prev = if i == 0 {
-            "t".to_owned()
+            root_alias.to_owned()
         } else {
             format!("r{i}")
         };
@@ -672,14 +904,40 @@ fn with_hops(hops: &[Hop], out: &mut String, body: impl FnOnce(&mut String)) {
                     let _ = write!(out, " ON j{n}.\"owner\" = {prev}.\"id\"");
                 }
             }
+            Hop::BackSingle { via, table, .. } => {
+                let _ = write!(out, "\"{table}\" r{n}");
+                if i > 0 {
+                    let _ = write!(out, " ON r{n}.\"{via}\" = {prev}.\"id\"");
+                }
+            }
+            Hop::BackMulti { junction, table } => {
+                let _ = write!(out, "\"{junction}\" j{n}");
+                if i > 0 {
+                    let _ = write!(out, " ON j{n}.\"target\" = {prev}.\"id\"");
+                }
+                let _ = write!(out, " JOIN \"{table}\" r{n} ON r{n}.\"id\" = j{n}.");
+                out.push_str("\"owner\"");
+            }
+            Hop::BackJunction { junction } => {
+                let _ = write!(out, "\"{junction}\" j{n}");
+                if i > 0 {
+                    let _ = write!(out, " ON j{n}.\"target\" = {prev}.\"id\"");
+                }
+            }
         }
     }
     match &hops[0] {
         Hop::Single { via, .. } => {
-            let _ = write!(out, " WHERE r1.\"id\" = t.\"{via}\" AND ");
+            let _ = write!(out, " WHERE r1.\"id\" = {root_alias}.\"{via}\" AND ");
         }
         Hop::Multi { .. } | Hop::Junction { .. } => {
-            out.push_str(" WHERE j1.\"owner\" = t.\"id\" AND ");
+            let _ = write!(out, " WHERE j1.\"owner\" = {root_alias}.\"id\" AND ");
+        }
+        Hop::BackSingle { via, .. } => {
+            let _ = write!(out, " WHERE r1.\"{via}\" = {root_alias}.\"id\" AND ");
+        }
+        Hop::BackMulti { .. } | Hop::BackJunction { .. } => {
+            let _ = write!(out, " WHERE j1.\"target\" = {root_alias}.\"id\" AND ");
         }
     }
     body(out);
@@ -689,6 +947,7 @@ fn with_hops(hops: &[Hop], out: &mut String, body: impl FnOnce(&mut String)) {
 fn term(t: &Term, order: &mut Vec<usize>, out: &mut String) {
     let (lower, s) = match t {
         Term::Col {
+            root,
             depth,
             junction,
             column,
@@ -696,7 +955,7 @@ fn term(t: &Term, order: &mut Vec<usize>, out: &mut String) {
             ..
         } => {
             let alias = if *depth == 0 {
-                "t".to_owned()
+                root.alias()
             } else if *junction {
                 format!("j{depth}")
             } else {

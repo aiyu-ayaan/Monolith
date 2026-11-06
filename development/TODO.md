@@ -55,7 +55,7 @@ Postgres prototype, PocketBase baseline, DuckDB A1–A3, Turso check, Docker ima
 ## In progress — Phase 1 (core data plane)
 
 Order of work: rules → contract → store tweaks → auth → core → server → admin UI (all landed).
-Next: `@collection` joins and back-relations (`_via_`), then the other follow-ups below, then the exit gates.
+Next: `:isset`/`:changed` write-rule modifiers, then the other follow-ups below, then the exit gates.
 
 - [x] `crates/monolith-rules`: parser, type checker, SQL compiler (IS/IS NOT, LIKE ESCAPE,
       IN, EXISTS semi-joins for single relations up to 4 hops), in-memory predicate,
@@ -95,8 +95,9 @@ Next: `@collection` joins and back-relations (`_via_`), then the other follow-up
       time-series charts, storage engine internals, per-collection counters, slow requests and recent errors
 - [x] Multi-relation junction tables (`_rel_<coll>_<field>`, `maxSelect > 1`), any-of `?=`/`?!=`/`?>`/`?>=`/`?<`/`?<=`/`?~`/`?!~`
       and all-of `=` operators across relation hops, multi-relation `expand`, and Admin UI schema/record drawer support
-- [ ] Remaining Phase 1 follow-ups: `@collection` joins,
-      back-relations (`_via_`), `:isset`/`:changed`, `fields` projection in SQL (now done at encode),
+- [x] `@collection.<name>(:<alias>)?.<path>` cross-collection joins (up to 4 aliases, shared within `&&` scopes)
+      and `<coll>_via_<field>` back-relations (over both single and multi relations) in rules, filters, and `expand`
+- [ ] Remaining Phase 1 follow-ups: `:isset`/`:changed`, `fields` projection in SQL (now done at encode),
       superuser TOTP + token revocation, docs/api/rest.md + rules.md, precompressed UI assets (brotli/gzip),
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
 - [ ] Phase 1 exit: M1–M6 gates, ported PocketBase rules vectors

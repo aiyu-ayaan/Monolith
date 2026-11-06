@@ -21,6 +21,8 @@
     "due > '2026-01-01' && due <= @now",
     "owner = null || owner != ''",
     "watchers ?= '00000000000000000000000000' || watchers = null",
+    "@collection.tasks:t2.title = title && @collection.tasks:t2.id = id",
+    "owner.tasks_via_owner.title ?= 'airport'",
     "(priority > 1 || priority < -1) && title !~ '%'"
   ],
   "invalid": [
@@ -32,6 +34,8 @@
     "missing = 1",
     "note = 'x'",
     "tags ?= 'x'",
-    "status ?= 'open'"
+    "status ?= 'open'",
+    "@collection.nope.id = id",
+    "tasks_via_missing.title ?= 'x'"
   ]
 }

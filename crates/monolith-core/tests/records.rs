@@ -1039,3 +1039,218 @@ async fn multi_relations_junction_filters_and_expand() {
         Err(CoreError::Conflict(_))
     ));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn collection_joins_and_back_relations_via_and_expand() {
+    let (_dir, reg) = setup().await;
+    let app = reg.app("demo").await.unwrap();
+    app.put_collection(
+        def(json!({
+            "name":"teams",
+            "fields":[{"name":"name","type":"text","required":true}],
+            "rules":{"list":"","view":""}
+        })),
+        true,
+    )
+    .await
+    .unwrap();
+    app.put_collection(
+        def(json!({
+            "name":"members",
+            "fields":[
+                {"name":"user","type":"relation","collection":"users","required":true},
+                {"name":"team","type":"relation","collection":"teams","required":true},
+                {"name":"role","type":"text","required":true}
+            ],
+            "rules":{"list":"","view":"role != 'secret'"}
+        })),
+        true,
+    )
+    .await
+    .unwrap();
+    app.put_collection(
+        def(json!({
+            "name":"projects",
+            "fields":[
+                {"name":"title","type":"text","required":true},
+                {"name":"team","type":"relation","collection":"teams","required":true},
+                {"name":"contributors","type":"relation","collection":"users","maxSelect":5}
+            ],
+            "rules":{
+                "list":"@collection.members.user = @request.auth.id && @collection.members.team = team",
+                "view":"@collection.members.user = @request.auth.id && @collection.members.team = team"
+            }
+        })),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let u1_raw = new_id();
+    let u2_raw = new_id();
+    let u1 = parse(
+        &app.create_record(
+            &su(),
+            "users",
+            json!({"id":encode_string(&u1_raw),"name":"ann"})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+    let u2 = parse(
+        &app.create_record(
+            &su(),
+            "users",
+            json!({"id":encode_string(&u2_raw),"name":"bo"})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+    let tm_core = parse(
+        &app.create_record(&su(), "teams", br#"{"name":"core"}"#)
+            .await
+            .unwrap(),
+    );
+    let tm_ops = parse(
+        &app.create_record(&su(), "teams", br#"{"name":"ops"}"#)
+            .await
+            .unwrap(),
+    );
+    app.create_record(
+        &su(),
+        "members",
+        json!({"user":u1["id"],"team":tm_core["id"],"role":"admin"})
+            .to_string()
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+    app.create_record(
+        &su(),
+        "members",
+        json!({"user":u2["id"],"team":tm_core["id"],"role":"secret"})
+            .to_string()
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+    app.create_record(
+        &su(),
+        "members",
+        json!({"user":u2["id"],"team":tm_ops["id"],"role":"member"})
+            .to_string()
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+
+    let p_core = parse(
+        &app.create_record(
+            &su(),
+            "projects",
+            json!({"title":"p-core","team":tm_core["id"],"contributors":[u1["id"], u2["id"]]})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+    let _p_ops = parse(
+        &app.create_record(
+            &su(),
+            "projects",
+            json!({"title":"p-ops","team":tm_ops["id"],"contributors":[u2["id"]]})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+
+    // @collection rule on projects: u1 is in tm_core only, so u1 sees only p-core.
+    let u1_projects = parse(
+        &app.list_records(&user(u1_raw), "projects", &ListParams::default())
+            .await
+            .unwrap(),
+    );
+    assert_eq!(u1_projects["items"].as_array().unwrap().len(), 1);
+    assert_eq!(u1_projects["items"][0]["id"], p_core["id"]);
+
+    // Back-relation filter over single relation (members_via_team) and multi-relation (projects_via_contributors).
+    let teams_filtered = parse(
+        &app.list_records(
+            &anon(),
+            "teams",
+            &ListParams {
+                filter: "members_via_team.role ?= 'admin'".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(teams_filtered["items"].as_array().unwrap().len(), 1);
+    assert_eq!(teams_filtered["items"][0]["name"], "core");
+
+    let users_filtered = parse(
+        &app.list_records(
+            &su(),
+            "users",
+            &ListParams {
+                filter: "projects_via_contributors.title ?= 'p-ops'".into(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(users_filtered["items"].as_array().unwrap().len(), 1);
+    assert_eq!(users_filtered["items"][0]["name"], "bo");
+
+    // Back-relation expand: single-rel (members_via_team.user) respects target view rule; multi-rel (projects_via_contributors).
+    let tm_view = parse(
+        &app.view_record_with(
+            &anon(),
+            "teams",
+            tm_core["id"].as_str().unwrap(),
+            &ReadOpts {
+                expand: Some("members_via_team.user".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .json,
+    );
+    let exp_members = tm_view["expand"]["members_via_team"].as_array().unwrap();
+    assert_eq!(
+        exp_members.len(),
+        1,
+        "secret role member hidden by view rule"
+    );
+    assert_eq!(exp_members[0]["role"], "admin");
+    assert_eq!(exp_members[0]["expand"]["user"]["name"], "ann");
+
+    let u2_view = parse(
+        &app.view_record_with(
+            &su(),
+            "users",
+            u2["id"].as_str().unwrap(),
+            &ReadOpts {
+                expand: Some("projects_via_contributors".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .json,
+    );
+    let exp_projs = u2_view["expand"]["projects_via_contributors"]
+        .as_array()
+        .unwrap();
+    assert_eq!(exp_projs.len(), 2);
+}

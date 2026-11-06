@@ -127,7 +127,7 @@ pub struct BatchItem<'a> {
 }
 
 type PlanKey = (u64, String, bool, String, String, Option<u32>);
-type ExpandMaps = Vec<HashMap<Id, Vec<u8>>>;
+type ExpandMaps = Vec<(HashMap<Id, Vec<u8>>, Option<HashMap<Id, Vec<Id>>>)>;
 
 pub struct App {
     pub name: String,
@@ -183,11 +183,17 @@ fn parse_fields(c: &Collection, fields: Option<&str>, su: bool) -> CoreResult<Op
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExpandKind {
+    Forward { slot: usize, multi: bool },
+    BackSingle { rel_field: String, rel_slot: usize },
+    BackMulti { junction: String },
+}
+
 #[derive(Debug, Clone)]
 struct ExpandNode {
     field: String,
-    slot: usize,
-    multi: bool,
+    kind: ExpandKind,
     target: Arc<Collection>,
     children: Vec<ExpandNode>,
 }
@@ -210,7 +216,7 @@ fn build_row_expand<'a>(
     row: &[Value],
     multi_maps: &MultiRelMaps,
     nodes: &'a [ExpandNode],
-    exp_maps: &[HashMap<Id, Vec<u8>>],
+    exp_maps: &ExpandMaps,
 ) -> Vec<(&'a str, Vec<u8>)> {
     let row_id = row.first().and_then(|v| match v {
         Value::Blob(b) => <&Id>::try_from(&b[..]).ok(),
@@ -219,39 +225,50 @@ fn build_row_expand<'a>(
     nodes
         .iter()
         .zip(exp_maps)
-        .filter_map(|(n, map)| {
-            if n.multi {
+        .filter_map(|(n, (map, back_map))| match &n.kind {
+            ExpandKind::Forward { slot, multi: false } => match row.get(*slot) {
+                Some(Value::Blob(b)) => <&Id>::try_from(&b[..])
+                    .ok()
+                    .and_then(|id| map.get(id))
+                    .map(|bytes| (n.field.as_str(), bytes.clone())),
+                _ => None,
+            },
+            ExpandKind::Forward { slot, multi: true } => {
                 let rid = row_id?;
                 let targets = multi_maps
                     .iter()
-                    .find(|(s, _)| *s == n.slot)
+                    .find(|(s, _)| *s == *slot)
                     .and_then(|(_, m)| m.get(rid))
                     .map_or(&[][..], Vec::as_slice);
-                let mut arr = Vec::new();
-                arr.push(b'[');
-                let mut first = true;
-                for tid in targets {
-                    if let Some(bytes) = map.get(tid) {
-                        if !first {
-                            arr.push(b',');
-                        }
-                        first = false;
-                        arr.extend_from_slice(bytes);
-                    }
-                }
-                arr.push(b']');
-                Some((n.field.as_str(), arr))
-            } else {
-                match row.get(n.slot) {
-                    Some(Value::Blob(b)) => <&Id>::try_from(&b[..])
-                        .ok()
-                        .and_then(|id| map.get(id))
-                        .map(|bytes| (n.field.as_str(), bytes.clone())),
-                    _ => None,
-                }
+                Some((n.field.as_str(), encode_expand_array(targets, map)))
+            }
+            ExpandKind::BackSingle { .. } | ExpandKind::BackMulti { .. } => {
+                let rid = row_id?;
+                let targets = back_map
+                    .as_ref()
+                    .and_then(|bm| bm.get(rid))
+                    .map_or(&[][..], Vec::as_slice);
+                Some((n.field.as_str(), encode_expand_array(targets, map)))
             }
         })
         .collect()
+}
+
+fn encode_expand_array(targets: &[Id], map: &HashMap<Id, Vec<u8>>) -> Vec<u8> {
+    let mut arr = Vec::new();
+    arr.push(b'[');
+    let mut first = true;
+    for tid in targets {
+        if let Some(bytes) = map.get(tid) {
+            if !first {
+                arr.push(b',');
+            }
+            first = false;
+            arr.extend_from_slice(bytes);
+        }
+    }
+    arr.push(b']');
+    arr
 }
 
 fn parse_expand(
@@ -274,32 +291,58 @@ fn parse_expand(
         let mut cur_coll = c;
         let mut level = &mut roots;
         for seg in segs {
-            let slot = cur_coll.slot(seg).ok_or_else(|| {
-                CoreError::BadRequest(format!(
+            let (kind, target) = if let Some(slot) = cur_coll.slot(seg) {
+                let f = cur_coll
+                    .field_at(slot)
+                    .filter(|f| f.kind == FieldType::Relation && (su || !f.hidden))
+                    .ok_or_else(|| {
+                        CoreError::BadRequest(format!(
+                            "field '{seg}' on '{}' is not a relation",
+                            cur_coll.def.name
+                        ))
+                    })?;
+                let target_name = f.collection.as_deref().ok_or_else(|| {
+                    CoreError::BadRequest(format!("relation '{seg}' has no target collection"))
+                })?;
+                let target = schema.get(target_name)?;
+                (
+                    ExpandKind::Forward {
+                        slot,
+                        multi: f.is_multi_rel(),
+                    },
+                    target,
+                )
+            } else if let Some((src_coll_name, rel_field)) = seg.split_once("_via_")
+                && let Some(src_coll) = schema.collections.get(src_coll_name)
+                && let Some(rel_slot) = src_coll.slot(rel_field)
+                && let Some(f) = src_coll.field_at(rel_slot)
+                && f.kind == FieldType::Relation
+                && (su || !f.hidden)
+                && f.collection.as_deref() == Some(cur_coll.def.name.as_str())
+            {
+                let kind = if f.is_multi_rel() {
+                    ExpandKind::BackMulti {
+                        junction: f.junction_table(&src_coll.def.name),
+                    }
+                } else {
+                    ExpandKind::BackSingle {
+                        rel_field: rel_field.to_owned(),
+                        rel_slot,
+                    }
+                };
+                (kind, src_coll)
+            } else {
+                return Err(CoreError::BadRequest(format!(
                     "unknown expand field '{seg}' on '{}'",
                     cur_coll.def.name
-                ))
-            })?;
-            let f = cur_coll
-                .field_at(slot)
-                .filter(|f| f.kind == FieldType::Relation && (su || !f.hidden))
-                .ok_or_else(|| {
-                    CoreError::BadRequest(format!(
-                        "field '{seg}' on '{}' is not a relation",
-                        cur_coll.def.name
-                    ))
-                })?;
-            let target_name = f.collection.as_deref().ok_or_else(|| {
-                CoreError::BadRequest(format!("relation '{seg}' has no target collection"))
-            })?;
-            let target = schema.get(target_name)?;
-            let pos = match level.iter().position(|n| n.slot == slot) {
+                )));
+            };
+            let pos = match level.iter().position(|n| n.field == seg) {
                 Some(i) => i,
                 None => {
                     level.push(ExpandNode {
                         field: seg.to_owned(),
-                        slot,
-                        multi: f.is_multi_rel(),
+                        kind,
                         target: target.clone(),
                         children: Vec::new(),
                     });
@@ -834,34 +877,96 @@ impl App {
         Box::pin(async move {
             let mut out = Vec::with_capacity(nodes.len());
             for node in nodes {
-                let mut ids: Vec<Id> = Vec::new();
-                if node.multi {
-                    if let Some((_, m)) = multi_maps.iter().find(|(s, _)| *s == node.slot) {
-                        for r in rows {
-                            if let Some(Value::Blob(b)) = r.first()
-                                && let Ok(oid) = <&Id>::try_from(&b[..])
-                                && let Some(tids) = m.get(oid)
-                            {
-                                for tid in tids {
-                                    if !ids.contains(tid) {
-                                        ids.push(*tid);
+                if !p.superuser && node.target.rules.view.is_none() {
+                    out.push((HashMap::new(), None));
+                    continue;
+                }
+                let mut back_map: Option<HashMap<Id, Vec<Id>>> = None;
+                let (where_col, ids): (&str, Vec<Id>) = match &node.kind {
+                    ExpandKind::Forward { slot, multi: true } => {
+                        let mut ids = Vec::new();
+                        if let Some((_, m)) = multi_maps.iter().find(|(s, _)| *s == *slot) {
+                            for r in rows {
+                                if let Some(Value::Blob(b)) = r.first()
+                                    && let Ok(oid) = <&Id>::try_from(&b[..])
+                                    && let Some(tids) = m.get(oid)
+                                {
+                                    for tid in tids {
+                                        if !ids.contains(tid) {
+                                            ids.push(*tid);
+                                        }
                                     }
                                 }
                             }
                         }
+                        ("id", ids)
                     }
-                } else {
-                    for r in rows {
-                        if let Some(Value::Blob(b)) = r.get(node.slot)
-                            && let Ok(id) = <&Id>::try_from(&b[..])
-                            && !ids.contains(id)
-                        {
-                            ids.push(*id);
+                    ExpandKind::Forward { slot, multi: false } => {
+                        let mut ids = Vec::new();
+                        for r in rows {
+                            if let Some(Value::Blob(b)) = r.get(*slot)
+                                && let Ok(id) = <&Id>::try_from(&b[..])
+                                && !ids.contains(id)
+                            {
+                                ids.push(*id);
+                            }
                         }
+                        ("id", ids)
                     }
-                }
-                if ids.is_empty() || (!p.superuser && node.target.rules.view.is_none()) {
-                    out.push(HashMap::new());
+                    ExpandKind::BackSingle { rel_field, .. } => {
+                        let mut pids = Vec::new();
+                        for r in rows {
+                            if let Some(Value::Blob(b)) = r.first()
+                                && let Ok(id) = <&Id>::try_from(&b[..])
+                                && !pids.contains(id)
+                            {
+                                pids.push(*id);
+                            }
+                        }
+                        back_map = Some(HashMap::new());
+                        (rel_field.as_str(), pids)
+                    }
+                    ExpandKind::BackMulti { junction } => {
+                        let mut pids: Vec<Value> = Vec::new();
+                        for r in rows {
+                            if let Some(v @ Value::Blob(_)) = r.first() {
+                                pids.push(v.clone());
+                            }
+                        }
+                        if pids.is_empty() {
+                            out.push((HashMap::new(), Some(HashMap::new())));
+                            continue;
+                        }
+                        let ph = vec!["?"; pids.len()].join(", ");
+                        let jsql = format!(
+                            "SELECT \"target\", \"owner\" FROM \"{junction}\" WHERE \"target\" IN ({ph}) ORDER BY \"target\", \"owner\""
+                        );
+                        let jrows = self
+                            .store
+                            .query(Query {
+                                sql: jsql.into(),
+                                params: pids,
+                            })
+                            .await?;
+                        let mut bm: HashMap<Id, Vec<Id>> = HashMap::new();
+                        let mut oids = Vec::new();
+                        for jr in jrows {
+                            if let [Value::Blob(tb), Value::Blob(ob)] = &jr[..]
+                                && let (Ok(tid), Ok(oid)) =
+                                    (<&Id>::try_from(&tb[..]), <&Id>::try_from(&ob[..]))
+                            {
+                                bm.entry(*tid).or_default().push(*oid);
+                                if !oids.contains(oid) {
+                                    oids.push(*oid);
+                                }
+                            }
+                        }
+                        back_map = Some(bm);
+                        ("id", oids)
+                    }
+                };
+                if ids.is_empty() {
+                    out.push((HashMap::new(), back_map));
                     continue;
                 }
                 let placeholders = vec!["?"; ids.len()].join(", ");
@@ -875,7 +980,7 @@ impl App {
                     r.sql.as_str()
                 };
                 let sql = format!(
-                    "SELECT {} FROM \"{}\" AS t WHERE t.\"id\" IN ({placeholders}) AND ({rule_sql})",
+                    "SELECT {} FROM \"{}\" AS t WHERE t.\"{where_col}\" IN ({placeholders}) AND ({rule_sql}) ORDER BY t.\"id\"",
                     node.target.sql.cols, node.target.def.name
                 );
                 let target_rows = self
@@ -885,6 +990,19 @@ impl App {
                         params,
                     })
                     .await?;
+                if let ExpandKind::BackSingle { rel_slot, .. } = &node.kind
+                    && let Some(bm) = back_map.as_mut()
+                {
+                    for tr in &target_rows {
+                        if let (Some(Value::Blob(tb)), Some(Value::Blob(pb))) =
+                            (tr.first(), tr.get(*rel_slot))
+                            && let (Ok(tid), Ok(pid)) =
+                                (<&Id>::try_from(&tb[..]), <&Id>::try_from(&pb[..]))
+                        {
+                            bm.entry(*pid).or_default().push(*tid);
+                        }
+                    }
+                }
                 let target_multi = self.load_multi_rels(&node.target, &target_rows).await?;
                 let child_maps = if node.children.is_empty() || target_rows.is_empty() {
                     Vec::new()
@@ -919,7 +1037,7 @@ impl App {
                     );
                     encoded_map.insert(*tid, buf);
                 }
-                out.push(encoded_map);
+                out.push((encoded_map, back_map));
             }
             Ok(out)
         })

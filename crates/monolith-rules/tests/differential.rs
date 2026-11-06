@@ -80,6 +80,32 @@ impl SchemaView for Schema {
                 }),
                 hidden: false,
             }),
+            "members" => {
+                let (kind, hidden) = match name {
+                    "id" => (FieldKind::Scalar(Ty::Id), false),
+                    "team" | "role" => (FieldKind::Scalar(Ty::Text), false),
+                    "user" => (
+                        FieldKind::Relation {
+                            target: "users".into(),
+                            multi: false,
+                        },
+                        false,
+                    ),
+                    "secret_user" => (
+                        FieldKind::Relation {
+                            target: "users".into(),
+                            multi: false,
+                        },
+                        true,
+                    ),
+                    _ => return None,
+                };
+                Some(FieldInfo {
+                    slot: 0,
+                    kind,
+                    hidden,
+                })
+            }
             _ => None,
         }
     }
@@ -474,6 +500,140 @@ fn sql_shape_and_classes() {
         ),
         vec![p1.to_vec(), p2.to_vec()]
     );
+
+    // @collection joins: shared alias in &&, multiple :alias bindings, and || isolation when table is empty.
+    conn.execute_batch(
+        "CREATE TABLE members (id BLOB PRIMARY KEY, user BLOB, team TEXT, role TEXT, secret_user BLOB) STRICT;",
+    )
+    .unwrap();
+    let u1 = IDS[0];
+    let u2 = IDS[1];
+    conn.execute(
+        "UPDATE t SET name = 'core', owner = ? WHERE id = ?",
+        (&u1[..], &p1[..]),
+    )
+    .unwrap();
+    conn.execute("UPDATE t SET name = 'ops' WHERE id = ?", [&p2[..]])
+        .unwrap();
+
+    // Before inserting any members: owner = @request.auth.id || (@collection.members...) must still match p1!
+    let or_join = compile(
+        &Schema,
+        "t",
+        "owner = @request.auth.id || (@collection.members.user = @request.auth.id && @collection.members.team = name)",
+        Mode::Rule,
+    )
+    .unwrap();
+    assert_eq!(or_join.class, Class::Relational);
+    let me_ctx = Ctx {
+        auth: Some(&me),
+        ..Ctx::default()
+    };
+    assert_eq!(
+        sql_ids(&conn, &or_join.sql, &or_join.bind(&me_ctx)),
+        vec![p1.to_vec()]
+    );
+
+    // Shared c1 alias: user=u1 is in 'ops' (admin), user=u2 is in 'core' (admin).
+    // If c1 were not shared across &&, p1 ('core') would falsely match user=u1 + team='core'!
+    conn.execute(
+        "INSERT INTO members VALUES (?, ?, 'ops', 'admin', NULL), (?, ?, 'core', 'member', NULL)",
+        (&[31u8; 16][..], &u1[..], &[32u8; 16][..], &u2[..]),
+    )
+    .unwrap();
+    let shared_join = compile(
+        &Schema,
+        "t",
+        "@collection.members.user = @request.auth.id && @collection.members.team = name",
+        Mode::Rule,
+    )
+    .unwrap();
+    assert_eq!(
+        shared_join.sql,
+        "EXISTS (SELECT 1 FROM \"members\" c1 WHERE (c1.\"user\" IS ? AND c1.\"team\" IS t.\"name\"))"
+    );
+    assert_eq!(
+        sql_ids(&conn, &shared_join.sql, &shared_join.bind(&me_ctx)),
+        vec![p2.to_vec()]
+    );
+
+    // Distinct :alias bindings (m1 and m2) on the same collection.
+    conn.execute(
+        "INSERT INTO members VALUES (?, ?, 'ops', 'member', NULL)",
+        (&[33u8; 16][..], &u2[..]),
+    )
+    .unwrap();
+    let aliased_join = compile(
+        &Schema,
+        "t",
+        "@collection.members:m1.team = name && @collection.members:m1.role = 'admin' && @collection.members:m2.team = name && @collection.members:m2.role = 'member'",
+        Mode::Rule,
+    )
+    .unwrap();
+    assert_eq!(
+        sql_ids(
+            &conn,
+            &aliased_join.sql,
+            &aliased_join.bind(&Ctx::default())
+        ),
+        vec![p2.to_vec()]
+    );
+
+    // Back-relations (_via_) over single relation (t.owner -> users) and multi-relation (t.tags -> tags).
+    conn.execute(
+        "INSERT INTO users VALUES (?, 'alice', 'admin', NULL), (?, 'bob', 'user', NULL)",
+        (&u1[..], &u2[..]),
+    )
+    .unwrap();
+    let back_single =
+        compile(&Schema, "users", "t_via_owner.name ?= 'core'", Mode::Filter).unwrap();
+    assert_eq!(back_single.class, Class::Relational);
+    let q_users = format!(
+        "SELECT id FROM users t WHERE {} ORDER BY id",
+        back_single.sql
+    );
+    let matched_users: Vec<Vec<u8>> = conn
+        .prepare(&q_users)
+        .unwrap()
+        .query_map(
+            params_from_iter(back_single.bind(&Ctx::default()).iter()),
+            |r| r.get(0),
+        )
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(matched_users, vec![u1.to_vec()]);
+
+    let back_multi = compile(&Schema, "tags", "t_via_tags.name ?= 'ops'", Mode::Filter).unwrap();
+    let q_tags = format!("SELECT id FROM tags t WHERE {} ORDER BY id", back_multi.sql);
+    let matched_tags: Vec<Vec<u8>> = conn
+        .prepare(&q_tags)
+        .unwrap()
+        .query_map(
+            params_from_iter(back_multi.bind(&Ctx::default()).iter()),
+            |r| r.get(0),
+        )
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(matched_tags, vec![tag_a.to_vec()]);
+
+    let back_multi_empty = compile(&Schema, "tags", "t_via_tags = null", Mode::Filter).unwrap();
+    let q_tags_empty = format!(
+        "SELECT id FROM tags t WHERE {} ORDER BY id",
+        back_multi_empty.sql
+    );
+    let matched_empty: Vec<Vec<u8>> = conn
+        .prepare(&q_tags_empty)
+        .unwrap()
+        .query_map(
+            params_from_iter(back_multi_empty.bind(&Ctx::default()).iter()),
+            |r| r.get(0),
+        )
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(matched_empty.is_empty());
 }
 
 #[test]
@@ -512,6 +672,38 @@ fn type_and_access_errors() {
     assert!(compile(&Schema, "t", "secret = 'x'", Mode::Rule).is_ok());
     assert!(matches!(
         err("secret = 'x'", Mode::Filter),
+        RuleError::UnknownField(_)
+    ));
+    // @collection errors: unknown collection, and > 4 join aliases.
+    assert!(matches!(
+        err("@collection.nope.id = id", Mode::Rule),
+        RuleError::UnknownField(_)
+    ));
+    assert!(matches!(
+        err(
+            "@collection.members:m1.team = 'a' && @collection.members:m2.team = 'b' && @collection.members:m3.team = 'c' && @collection.members:m4.team = 'd' && @collection.members:m5.team = 'e'",
+            Mode::Rule
+        ),
+        RuleError::Limit(_)
+    ));
+    // Hidden relation via _via_: allowed in Mode::Rule, rejected in Mode::Filter.
+    assert!(
+        compile(
+            &Schema,
+            "users",
+            "members_via_secret_user.role ?= 'admin'",
+            Mode::Rule
+        )
+        .is_ok()
+    );
+    assert!(matches!(
+        compile(
+            &Schema,
+            "users",
+            "members_via_secret_user.role ?= 'admin'",
+            Mode::Filter
+        )
+        .unwrap_err(),
         RuleError::UnknownField(_)
     ));
 }

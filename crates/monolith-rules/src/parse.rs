@@ -302,14 +302,31 @@ impl Parser {
         match self.next() {
             Some(Tok::Lit(l)) => Ok(Operand::Lit(l)),
             Some(Tok::Path(p)) => {
-                let (path, modifier) = match p.split_once(':') {
-                    None => (p.as_str(), None),
-                    Some((path, "lower")) => (path, Some(Modifier::Lower)),
-                    Some((_, m)) => return Err(RuleError::Unsupported(leak_modifier(m))),
-                };
-                let parts: Vec<String> = path.split('.').map(str::to_owned).collect();
+                let mut parts: Vec<String> = p.split('.').map(str::to_owned).collect();
                 if parts.iter().any(String::is_empty) {
                     return Err(err(at, format!("bad identifier '{p}'")));
+                }
+                let is_coll = parts.first().is_some_and(|s| s == "@collection");
+                // Extract trailing `:modifier` from the last segment (unless it is `@collection.name:alias` with no field).
+                let modifier = if !(is_coll && parts.len() == 2)
+                    && let Some((base, m)) = parts.last().unwrap().clone().split_once(':')
+                {
+                    if base.is_empty() {
+                        return Err(err(at, format!("bad identifier '{p}'")));
+                    }
+                    let modif = match m {
+                        "lower" => Modifier::Lower,
+                        _ => return Err(RuleError::Unsupported(leak_modifier(m))),
+                    };
+                    *parts.last_mut().unwrap() = base.to_owned();
+                    Some(modif)
+                } else {
+                    None
+                };
+                for (i, seg) in parts.iter().enumerate() {
+                    if seg.contains(':') && !(is_coll && i == 1) {
+                        return Err(err(at, format!("bad identifier '{p}'")));
+                    }
                 }
                 Ok(Operand::Path { parts, modifier })
             }
@@ -415,6 +432,18 @@ mod tests {
                 r: Operand::Lit(Lit::Str("é".into()))
             }
         );
+        assert_eq!(
+            parse("@collection.members:m1.name:lower = 'x'").unwrap(),
+            Expr::Cmp {
+                l: Operand::Path {
+                    parts: vec!["@collection".into(), "members:m1".into(), "name".into()],
+                    modifier: Some(Modifier::Lower)
+                },
+                op: CmpOp::Eq,
+                any: false,
+                r: Operand::Lit(Lit::Str("x".into()))
+            }
+        );
     }
 
     #[test]
@@ -429,6 +458,7 @@ mod tests {
             "a = 1 &&",
             "a.. = 1",
             "a:changed = 1",
+            "a:b.c = 1",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
         }

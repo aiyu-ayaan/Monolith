@@ -23,7 +23,7 @@ curl -H "Authorization: Bearer $MONOLITH_KEY" \
 
 Check this list before relying on a feature; the rest of this page is the target design.
 
-- Works: list (`filter`, `sort`, `limit`, `cursor`, `fields`, single- and multi-relation `expand`,
+- Works: list (`filter`, `sort`, `limit`, `cursor`, `fields`, single/multi/back-relation `_via_` `expand`,
   `total=none|exact|estimate`), `GET .../records:count`, create, view (`fields`, `expand`, `ETag`,
   `If-None-Match` → 304), `PATCH` update (`If-Match` → 412), `PUT` upsert (201 when new, 200 when
   existing), delete (`If-Match`), `?dry_run=true` on all write endpoints, `POST /api/v1/apps/{app}/batch`,
