@@ -1,0 +1,28 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Version comes from packageManager in package.json.
+      - uses: pnpm/action-setup@v4
+      # rust-toolchain.toml pins the version; rustup installs it on first cargo call.
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm run rust:lint
+      - run: pnpm run rust:test
+      - run: pnpm run rust:bench:build
+
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

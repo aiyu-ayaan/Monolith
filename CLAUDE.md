@@ -86,11 +86,13 @@ REST and WebSocket must stay complete without an SDK.
   conformance tests against a real server container.
 - JS/TS monorepo managed with `pnpm` workspaces (`ui`, `sdks/typescript`, `examples/web-typescript`).
   Root `pnpm setup` or `pnpm install` sets up all JS/TS projects.
+- Run every project task through root `pnpm` scripts, Rust included (`pnpm rust:*`
+  wrap cargo). Add a script to `package.json` instead of documenting a raw command.
 - Commit at each completed stage of work (one logical change per commit). Use
   Conventional Commits.
 - Never add AI co-author trailers (no `Co-Authored-By:` lines) to commits or PRs.
 
-## Commands (planned; update when the workspace exists)
+## Commands
 
 ```bash
 # JS/TS workspace
@@ -99,11 +101,15 @@ pnpm dev:ui                           # admin UI dev server
 pnpm build                            # builds all JS/TS workspace projects
 pnpm test                             # runs tests across JS/TS packages
 
-# Rust backend
-cargo build --release -p monolith-server
-cargo test --workspace
-cargo bench -p monolith-store
-docker build -t monolith:dev .
+# Rust backend (cargo wrapped by pnpm scripts)
+pnpm rust:build                       # debug build of the workspace
+pnpm rust:release                     # release build (lto=fat)
+pnpm rust:test                        # cargo test --workspace
+pnpm rust:lint                        # fmt check + clippy -D warnings
+pnpm rust:fmt                         # format
+pnpm rust:bench:build                 # compile benches only
+pnpm rust:bench                       # run benches (ask the owner before running on the host)
+pnpm rust:deny                        # cargo-deny (needs `cargo install cargo-deny`)
 ```
 
 ## Reference material
