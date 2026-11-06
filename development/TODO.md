@@ -48,9 +48,61 @@ Source of truth for design: `docs/README.md`. Phases: `docs/20-roadmap.md`.
 - [ ] Docker image: musl vs glibc, DuckDB static link feasibility
 - [ ] Mark ADR-001 (`docs/04`) Accepted with measured numbers; revise `docs/16` budgets
 
+Phase 0 still open: benchmark runs (owner approval needed before running on the host),
+Postgres prototype, PocketBase baseline, DuckDB A1–A3, Turso check, Docker image.
+
+## In progress — Phase 1 (core data plane)
+
+Order of work: rules → contract → store tweaks → auth → core → server → admin UI.
+
+- [x] `crates/monolith-rules`: parser, type checker, SQL compiler (IS/IS NOT, LIKE ESCAPE,
+      IN, EXISTS semi-joins for single relations up to 4 hops), in-memory predicate,
+      classes Const/AuthOnly/RowLocal/Relational, differential suite (12k random rules),
+      micro-bench (`benches/rules.rs`)
+- [x] `api/`: OpenAPI v1 for health, superuser login, superusers, apps, collections,
+      records (keyset list, CRUD), batch; RFC 9457 `error.json`; vectors `ids.json`, `filters.json`
+- [x] `monolith-store`: `seq_slot`/`hlc_slot` stamping, `RETURNING` rows in `WriteResult`,
+      zero affected rows → `NotFound` (rule-guarded writes), `Error::Constraint`
+- [x] `crates/monolith-auth` (tests pass): Argon2id
+      hash/verify, HMAC-SHA256 superuser token `v1.<sub hex>.<exp µs>.<mac hex>`
+- [ ] `crates/monolith-core` (WIP, files written, **not yet in `lib.rs`, not compiled**):
+  - [x] `src/error.rs`: `CoreError` (maps to problem types), `FieldError`
+  - [x] `src/schema.rs`: `CollectionDef`/`FieldDef`/`Rules`/`IndexDef` (serde), `validate_def`,
+        `Schema::build` (compiles rules + SQL templates per version), `SchemaView` for `Schema`.
+        Slots: 0 id, 1 created, 2 updated, 3 _v, 4.. user fields. Templates: view/insert/update/delete,
+        each with a rule variant and a superuser variant (`"1"`). Insert = `INSERT … SELECT * FROM
+        (SELECT ? AS …) AS t WHERE (rule) RETURNING …`; update uses `iif(?, ?, col)` per field.
+  - [x] `src/codec.rs`: JSON writer (`write_record`, `format_us`), schema-driven body decoder
+        (`decode_body`) with per-field validation
+  - [x] `src/ddl.rs`: `plan(old, new)` → CREATE TABLE (STRICT, WITHOUT ROWID) / ADD/DROP COLUMN /
+        index diff; type changes rejected (needs online rebuild); `sql_str` quoting
+  - [x] `src/list.rs`: `parse_sort`, keyset `plan` (NULL-aware), cursor encode/decode (hex, FNV shape hash)
+  - [ ] Next: write `src/lib.rs` (`mod` declarations + re-exports), fix compile errors, run unit tests
+  - [ ] `src/app.rs`: `App { store: SqliteStore, schema: RwLock<Arc<Schema>>, schema_lock: tokio Mutex,
+        list plan cache (bounded, clear on overflow) }`; open = create `_collections(name, cid, def)` and
+        `_meta(schema_version)`, load schema; `put_collection` (validate → `Schema::build` → `ddl::plan` +
+        upsert def + bump version via `apply_schema` → swap Arc); `delete_collection` (reject if referenced);
+        records: create/view/update/delete/list/batch with `Principal { superuser, auth: Option<rules::Auth> }`
+        (rule `None` → 403 for non-superusers; create rule rejection → 403; update/delete → 404);
+        validate client ids (UUIDv7 version bits, timestamp in [now-30d, now+5min])
+  - [ ] `src/system.rs`: `Registry` over `/data/system.db` (tables `apps`, `superusers`, `settings` with
+        `token_key`), lazy app open via `spawn_blocking`, create/list/delete app (`/data/apps/<name>/data.db`),
+        superuser create/login (Argon2 on blocking pool)
+  - [ ] Integration tests in `crates/monolith-core/tests` (CRUD, rules, list paging with NULL sort keys,
+        migrations, batch atomicity); check `api/conformance/vectors/*.json`
+- [ ] `crates/monolith-server` (stub `main.rs` only): axum 0.8 routes per `api/openapi/monolith.v1.yaml`,
+      problem+json errors, `X-Request-Id` middleware, bearer superuser token, env config
+      (`MONOLITH_DATA`, `MONOLITH_ADDR`, first superuser from `MONOLITH_ADMIN_EMAIL`/`MONOLITH_ADMIN_PASSWORD`),
+      `pnpm` script `server:dev`; HTTP integration tests
+- [ ] Admin UI v0 (SolidJS): login, apps, collections editor, records grid
+- [ ] Phase 1 follow-ups: multi-relation junction tables + `?=` operators, `@collection` joins,
+      back-relations (`_via_`), `:isset`/`:changed`, expand, `fields` projection in SQL (now done at
+      encode), `total=exact|estimate`, superuser TOTP, `rules:explain`/`query:explain`, `dry_run`,
+      request tracing, agent-skills updates, docs/api/rest.md + rules.md
+- [ ] Phase 1 exit: M1–M6 gates, ported PocketBase rules vectors
+
 ## Later phases (see `docs/20-roadmap.md`)
 
-- [ ] Phase 1: core data plane (apps, collections, rules compiler, records REST, change log, admin UI v0)
 - [x] Agent skills pack scaffold (`agent-skills/`) and debug-surface design (`docs/22`)
 - [ ] Build `tools/agent-pack` generator + `monolith agent-init` CLI; serve `/llms.txt`, `/agent/*`
 - [ ] Implement debug endpoints (trace, rules:explain, query:explain, realtime inspect, sync status, dry_run) in Phase 1–2
