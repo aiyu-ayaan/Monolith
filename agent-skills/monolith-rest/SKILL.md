@@ -23,10 +23,11 @@ curl -H "Authorization: Bearer $MONOLITH_KEY" \
 
 Check this list before relying on a feature; the rest of this page is the target design.
 
-- Works: list (`filter`, `sort`, `limit`, `cursor`, `fields`, `expand`, `total=none|exact|estimate`),
-  `GET .../records:count`, create, view (`fields`, `expand`, `ETag`, `If-None-Match` → 304),
-  `PATCH` update (`If-Match` → 412), `PUT` upsert (201 when new, 200 when existing), delete (`If-Match`),
-  `?dry_run=true` on all write endpoints, and `POST /api/v1/apps/{app}/batch`.
+- Works: list (`filter`, `sort`, `limit`, `cursor`, `fields`, single- and multi-relation `expand`,
+  `total=none|exact|estimate`), `GET .../records:count`, create, view (`fields`, `expand`, `ETag`,
+  `If-None-Match` → 304), `PATCH` update (`If-Match` → 412), `PUT` upsert (201 when new, 200 when
+  existing), delete (`If-Match`), `?dry_run=true` on all write endpoints, `POST /api/v1/apps/{app}/batch`,
+  and multi-relation fields (`maxSelect > 1`, stored in `_rel_<coll>_<field>` junction tables).
 - Debug & stats endpoints: `POST /api/v1/apps/{app}/collections:diff`, `POST /api/v1/apps/{app}/rules:explain`,
   `POST /api/v1/apps/{app}/query:explain`, `GET /api/v1/apps/{app}/logs?request_id=...`,
   `GET /api/v1/apps/{app}/logs/slow`, `GET /api/v1/system/stats`,
