@@ -34,13 +34,16 @@ Source of truth for design: `docs/README.md`. Phases: `docs/20-roadmap.md`.
 
 ## Next — Phase 0 (spikes and bake-off)
 
-- [ ] Create Cargo workspace skeleton + `rust-toolchain.toml`, CI (fmt, clippy, test, deny)
-- [ ] Create `bench/` harness (oha already installed; custom Rust harness for realtime/sync)
+- [x] Create Cargo workspace skeleton + `rust-toolchain.toml`, CI (fmt, clippy, test, deny); Rust tasks via `pnpm rust:*`
+- [x] Create `bench/harness` engine harness (S1 point read, S3 concurrent inserts; `pnpm bench:engine`)
+- [ ] Extend harness: S2, S4–S8, realtime/sync scenarios
 - [ ] PocketBase baseline P1–P7 in Docker (ask before running on host) — validates B1–B10
-- [ ] `AppStore` trait + SQLite prototype: writer thread, group commit, reader pool
+- [x] `AppStore` trait + SQLite prototype: writer thread, group commit, reader pool (`crates/monolith-store`)
+- [ ] SQLite prototype follow-ups: writer restart on panic, bounded reader wait (`read_timeout`), idle WAL checkpoint task, `LIBSQLITE3_FLAGS` compile flags
 - [ ] Postgres co-located prototype over Unix socket
 - [ ] Verify Turso MVCC maturity (Q-engine); include only if usable
-- [ ] Micro-benchmarks: JSON row writer vs `serde_json`/`sonic-rs`, UUIDv7 BLOB, `WITHOUT ROWID` vs rowid, page size, mimalloc vs jemalloc
+- [x] Micro-benchmark code: UUIDv7 encode/decode, group commit on/off, `WITHOUT ROWID` vs rowid, point read (`benches/store.rs`, not yet run)
+- [ ] Micro-benchmarks still to write: JSON row writer vs `serde_json`/`sonic-rs`, page size, mimalloc vs jemalloc
 - [ ] Analytics bake-off A1–A3: DuckDB vs SQLite rollups
 - [ ] Docker image: musl vs glibc, DuckDB static link feasibility
 - [ ] Mark ADR-001 (`docs/04`) Accepted with measured numbers; revise `docs/16` budgets
