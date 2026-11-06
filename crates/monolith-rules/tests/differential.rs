@@ -23,27 +23,40 @@ const T: [(&str, FieldKind, bool); 8] = [
 impl SchemaView for Schema {
     fn field(&self, coll: &str, name: &str) -> Option<FieldInfo> {
         match coll {
-            "t" => T
-                .iter()
-                .enumerate()
-                .find(|(_, f)| f.0 == name)
-                .map(|(slot, f)| FieldInfo {
-                    slot,
-                    kind: if name == "owner" {
-                        FieldKind::Relation {
-                            target: "users".into(),
-                        }
-                    } else {
-                        f.1.clone()
-                    },
-                    hidden: f.2,
-                }),
+            "t" => {
+                if name == "tags" {
+                    return Some(FieldInfo {
+                        slot: 8,
+                        kind: FieldKind::Relation {
+                            target: "tags".into(),
+                            multi: true,
+                        },
+                        hidden: false,
+                    });
+                }
+                T.iter()
+                    .enumerate()
+                    .find(|(_, f)| f.0 == name)
+                    .map(|(slot, f)| FieldInfo {
+                        slot,
+                        kind: if name == "owner" {
+                            FieldKind::Relation {
+                                target: "users".into(),
+                                multi: false,
+                            }
+                        } else {
+                            f.1.clone()
+                        },
+                        hidden: f.2,
+                    })
+            }
             "users" => {
                 let kind = match name {
                     "id" => FieldKind::Scalar(Ty::Id),
                     "name" | "role" => FieldKind::Scalar(Ty::Text),
                     "org" => FieldKind::Relation {
                         target: "orgs".into(),
+                        multi: false,
                     },
                     _ => return None,
                 };
@@ -56,6 +69,15 @@ impl SchemaView for Schema {
             "orgs" => (name == "id" || name == "plan").then(|| FieldInfo {
                 slot: 0,
                 kind: FieldKind::Scalar(if name == "id" { Ty::Id } else { Ty::Text }),
+                hidden: false,
+            }),
+            "tags" => (name == "id" || name == "label" || name == "weight").then(|| FieldInfo {
+                slot: 0,
+                kind: FieldKind::Scalar(match name {
+                    "id" => Ty::Id,
+                    "label" => Ty::Text,
+                    _ => Ty::Number,
+                }),
                 hidden: false,
             }),
             _ => None,
@@ -379,12 +401,86 @@ fn sql_shape_and_classes() {
     // Relational SQL must run.
     let conn = db(&[]);
     sql_ids(&conn, &rel.sql, &rel.bind(&Ctx::default()));
+
+    // Multi-relation any-of (`?=`) vs all (`=`) and bare junction checks.
+    conn.execute_batch(
+        "CREATE TABLE tags (id BLOB PRIMARY KEY, label TEXT, weight INTEGER) STRICT;
+         CREATE TABLE _rel_t_tags (owner BLOB NOT NULL, target BLOB NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY (owner, target)) STRICT, WITHOUT ROWID;",
+    )
+    .unwrap();
+    let p1 = [10u8; 16];
+    let p2 = [11u8; 16];
+    let p3 = [12u8; 16];
+    for p in [p1, p2, p3] {
+        conn.execute(
+            "INSERT INTO t VALUES (?, 'n', 0.0, 0, 0, 0, NULL, NULL)",
+            [&p[..]],
+        )
+        .unwrap();
+    }
+    let tag_a = [21u8; 16];
+    let tag_b = [22u8; 16];
+    conn.execute(
+        "INSERT INTO tags VALUES (?, 'rust', 10), (?, 'go', 5)",
+        (&tag_a[..], &tag_b[..]),
+    )
+    .unwrap();
+    // p1 has [rust, go], p2 has [rust], p3 has []
+    conn.execute(
+        "INSERT INTO _rel_t_tags VALUES (?, ?, 0), (?, ?, 1), (?, ?, 0)",
+        (
+            &p1[..],
+            &tag_a[..],
+            &p1[..],
+            &tag_b[..],
+            &p2[..],
+            &tag_a[..],
+        ),
+    )
+    .unwrap();
+
+    let tag_a_s = encode_string(&tag_a);
+    let any_id = compile(&Schema, "t", &format!("tags ?= '{tag_a_s}'"), Mode::Filter).unwrap();
+    assert_eq!(any_id.class, Class::Relational);
+    assert_eq!(
+        sql_ids(&conn, &any_id.sql, &any_id.bind(&Ctx::default())),
+        vec![p1.to_vec(), p2.to_vec()]
+    );
+
+    let all_label = compile(&Schema, "t", "tags.label = 'rust'", Mode::Filter).unwrap();
+    assert_eq!(
+        sql_ids(&conn, &all_label.sql, &all_label.bind(&Ctx::default())),
+        vec![p2.to_vec()]
+    );
+
+    let any_label = compile(&Schema, "t", "tags.label ?= 'go'", Mode::Filter).unwrap();
+    assert_eq!(
+        sql_ids(&conn, &any_label.sql, &any_label.bind(&Ctx::default())),
+        vec![p1.to_vec()]
+    );
+
+    let empty_tags = compile(&Schema, "t", "tags = null", Mode::Filter).unwrap();
+    assert_eq!(
+        sql_ids(&conn, &empty_tags.sql, &empty_tags.bind(&Ctx::default())),
+        vec![p3.to_vec()]
+    );
+
+    let non_empty_tags = compile(&Schema, "t", "tags != ''", Mode::Filter).unwrap();
+    assert_eq!(
+        sql_ids(
+            &conn,
+            &non_empty_tags.sql,
+            &non_empty_tags.bind(&Ctx::default())
+        ),
+        vec![p1.to_vec(), p2.to_vec()]
+    );
 }
 
 #[test]
 fn type_and_access_errors() {
     let err = |src: &str, mode| compile(&Schema, "t", src, mode).unwrap_err();
     assert!(matches!(err("name = 1", Mode::Rule), RuleError::Type(_)));
+    assert!(matches!(err("name ?= 'a'", Mode::Rule), RuleError::Type(_)));
     assert!(matches!(err("flag > true", Mode::Rule), RuleError::Type(_)));
     assert!(matches!(err("count ~ 1", Mode::Rule), RuleError::Type(_)));
     assert!(matches!(

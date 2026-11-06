@@ -28,9 +28,11 @@ pub enum Ty {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldKind {
     Scalar(Ty),
-    /// Single relation: an Id column pointing at `target.id`.
+    /// Single relation (`multi = false`, Id column) or multi-relation (`multi = true`,
+    /// `_rel_<collection>_<field>` junction table) pointing at `target.id`.
     Relation {
         target: String,
+        multi: bool,
     },
 }
 

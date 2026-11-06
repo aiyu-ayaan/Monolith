@@ -45,7 +45,12 @@ pub enum CmpOp {
 pub enum Expr {
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
-    Cmp(Operand, CmpOp, Operand),
+    Cmp {
+        l: Operand,
+        op: CmpOp,
+        any: bool,
+        r: Operand,
+    },
     In(Operand, Vec<Operand>),
 }
 
@@ -58,7 +63,7 @@ enum Tok {
     Or,
     In,
     Op(CmpOp),
-    AnyOp,
+    AnyOp(CmpOp),
     Lit(Lit),
     Path(String),
 }
@@ -68,6 +73,23 @@ fn err(pos: usize, msg: impl Into<String>) -> RuleError {
         pos,
         msg: msg.into(),
     }
+}
+
+fn cmp_tok(b: &[u8], i: usize) -> Option<(CmpOp, usize)> {
+    let two = b.get(i..i + 2).unwrap_or(&[]);
+    Some(match two {
+        b"!=" => (CmpOp::Ne, 2),
+        b"!~" => (CmpOp::NotLike, 2),
+        b">=" => (CmpOp::Ge, 2),
+        b"<=" => (CmpOp::Le, 2),
+        _ => match *b.get(i)? {
+            b'=' => (CmpOp::Eq, 1),
+            b'>' => (CmpOp::Gt, 1),
+            b'<' => (CmpOp::Lt, 1),
+            b'~' => (CmpOp::Like, 1),
+            _ => return None,
+        },
+    })
 }
 
 fn lex(src: &str) -> Result<Vec<(usize, Tok)>, RuleError> {
@@ -104,24 +126,13 @@ fn lex(src: &str) -> Result<Vec<(usize, Tok)>, RuleError> {
                 Tok::Or
             }
             b'?' => {
-                // `?=` etc. apply to multi-value fields, which arrive with junction tables.
-                i += 1;
-                Tok::AnyOp
+                let (op, n) = cmp_tok(b, i + 1)
+                    .ok_or_else(|| err(i, "expected comparison operator after '?'"))?;
+                i += 1 + n;
+                Tok::AnyOp(op)
             }
             b'=' | b'!' | b'<' | b'>' | b'~' => {
-                let (op, n) = match two {
-                    b"!=" => (CmpOp::Ne, 2),
-                    b"!~" => (CmpOp::NotLike, 2),
-                    b">=" => (CmpOp::Ge, 2),
-                    b"<=" => (CmpOp::Le, 2),
-                    _ => match c {
-                        b'=' => (CmpOp::Eq, 1),
-                        b'>' => (CmpOp::Gt, 1),
-                        b'<' => (CmpOp::Lt, 1),
-                        b'~' => (CmpOp::Like, 1),
-                        _ => return Err(err(i, "unexpected '!'")),
-                    },
-                };
+                let (op, n) = cmp_tok(b, i).ok_or_else(|| err(i, "unexpected '!'"))?;
                 i += n;
                 Tok::Op(op)
             }
@@ -255,7 +266,18 @@ impl Parser {
         let l = self.operand()?;
         let at = self.at();
         match self.next() {
-            Some(Tok::Op(op)) => Ok(Expr::Cmp(l, op, self.operand()?)),
+            Some(Tok::Op(op)) => Ok(Expr::Cmp {
+                l,
+                op,
+                any: false,
+                r: self.operand()?,
+            }),
+            Some(Tok::AnyOp(op)) => Ok(Expr::Cmp {
+                l,
+                op,
+                any: true,
+                r: self.operand()?,
+            }),
             Some(Tok::In) => {
                 if self.next() != Some(Tok::LParen) {
                     return Err(err(self.at(), "expected '(' after in"));
@@ -270,9 +292,6 @@ impl Parser {
                 }
                 Ok(Expr::In(l, list))
             }
-            Some(Tok::AnyOp) => Err(RuleError::Unsupported(
-                "any-of operators (?=) need multi-value fields",
-            )),
             _ => Err(err(at, "expected comparison operator")),
         }
     }
@@ -339,22 +358,29 @@ mod tests {
 
     #[test]
     fn precedence_and_literals() {
-        let e = parse("a = 1 || b != 'x' && c >= -2.5").unwrap();
+        let e = parse("a = 1 || b ?!= 'x' && c >= -2.5").unwrap();
         assert_eq!(
             e,
             Expr::Or(
-                Box::new(Expr::Cmp(path("a"), CmpOp::Eq, Operand::Lit(Lit::Int(1)))),
+                Box::new(Expr::Cmp {
+                    l: path("a"),
+                    op: CmpOp::Eq,
+                    any: false,
+                    r: Operand::Lit(Lit::Int(1)),
+                }),
                 Box::new(Expr::And(
-                    Box::new(Expr::Cmp(
-                        path("b"),
-                        CmpOp::Ne,
-                        Operand::Lit(Lit::Str("x".into()))
-                    )),
-                    Box::new(Expr::Cmp(
-                        path("c"),
-                        CmpOp::Ge,
-                        Operand::Lit(Lit::Real(-2.5))
-                    )),
+                    Box::new(Expr::Cmp {
+                        l: path("b"),
+                        op: CmpOp::Ne,
+                        any: true,
+                        r: Operand::Lit(Lit::Str("x".into())),
+                    }),
+                    Box::new(Expr::Cmp {
+                        l: path("c"),
+                        op: CmpOp::Ge,
+                        any: false,
+                        r: Operand::Lit(Lit::Real(-2.5)),
+                    }),
                 )),
             )
         );
@@ -379,14 +405,15 @@ mod tests {
         );
         assert_eq!(
             *r,
-            Expr::Cmp(
-                Operand::Path {
+            Expr::Cmp {
+                l: Operand::Path {
                     parts: vec!["name".into()],
                     modifier: Some(Modifier::Lower)
                 },
-                CmpOp::Like,
-                Operand::Lit(Lit::Str("é".into()))
-            )
+                op: CmpOp::Like,
+                any: false,
+                r: Operand::Lit(Lit::Str("é".into()))
+            }
         );
     }
 
@@ -398,9 +425,9 @@ mod tests {
             "(a = 1",
             "a = 1 b",
             "a ! 1",
+            "a ? 1",
             "a = 1 &&",
             "a.. = 1",
-            "a ?= 1",
             "a:changed = 1",
         ] {
             assert!(parse(bad).is_err(), "{bad}");

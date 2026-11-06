@@ -800,6 +800,7 @@ components:
           description: select fields only; allowed values
         collection: { $ref: "#/components/schemas/Name", description: relation fields only; target collection }
         onDelete: { type: string, enum: [restrict, cascade, setNull], default: restrict, description: relation fields only }
+        maxSelect: { type: integer, minimum: 1, default: 1, description: "relation fields only; > 1 makes it a multi-relation backed by a _rel_<collection>_<field> junction table" }
 
     Rules:
       type: object
@@ -855,7 +856,11 @@ components:
         _v: { type: integer, description: seq of the last change to this record }
         expand:
           type: object
-          additionalProperties: { $ref: "#/components/schemas/Record" }
+          additionalProperties:
+            oneOf:
+              - { $ref: "#/components/schemas/Record" }
+              - type: array
+                items: { $ref: "#/components/schemas/Record" }
 
     RecordInput:
       type: object

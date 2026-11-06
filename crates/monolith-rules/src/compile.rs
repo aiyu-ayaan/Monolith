@@ -27,9 +27,11 @@ pub(crate) struct Param {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Term {
-    /// `depth` 0 is the queried table (alias `t`), n is relation hop `rn`.
+    /// `depth` 0 is the queried table (alias `t`), n is relation hop `rn` (or `j{n}` for a
+    /// bare junction hop).
     Col {
         depth: usize,
+        junction: bool,
         column: String,
         slot: usize,
         lower: bool,
@@ -41,10 +43,13 @@ pub(crate) enum Term {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct Hop {
-    /// Column on the previous alias holding the related id.
-    pub via: String,
-    pub table: String,
+pub(crate) enum Hop {
+    /// Single-relation hop: `table` (`r{n}`) joined via `via` on the previous alias.
+    Single { via: String, table: String },
+    /// Multi-relation hop with further field access: `junction` (`j{n}`) + `table` (`r{n}`).
+    Multi { junction: String, table: String },
+    /// Bare multi-relation hop (`tags ?= 'id'`): `junction` (`j{n}`) only, comparing `j{n}."target"`.
+    Junction { junction: String },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +60,7 @@ pub(crate) enum Node {
     Cmp {
         l: Term,
         op: CmpOp,
+        any: bool,
         r: Term,
         hops: Vec<Hop>,
     },
@@ -101,7 +107,7 @@ pub fn compile(
     let mut node = c.expr(&ast)?;
     let mut sql = String::with_capacity(src.len() * 2);
     let mut order = Vec::with_capacity(c.params.len());
-    emit(&node, &mut order, &mut sql);
+    emit(&node, &c.params, &mut order, &mut sql);
     // Renumber params into SQL text order so `bind()` matches the anonymous `?`s.
     let mut pos = vec![0; c.params.len()];
     for (new, &old) in order.iter().enumerate() {
@@ -144,7 +150,7 @@ impl Checker<'_> {
         Ok(match e {
             Expr::And(a, b) => Node::And(Box::new(self.expr(a)?), Box::new(self.expr(b)?)),
             Expr::Or(a, b) => Node::Or(Box::new(self.expr(a)?), Box::new(self.expr(b)?)),
-            Expr::Cmp(l, op, r) => self.cmp(l, *op, r)?,
+            Expr::Cmp { l, op, any, r } => self.cmp(l, *op, *any, r)?,
             Expr::In(l, list) => self.in_list(l, list)?,
         })
     }
@@ -153,7 +159,7 @@ impl Checker<'_> {
         self.class = self.class.max(c);
     }
 
-    fn cmp(&mut self, l: &Operand, op: CmpOp, r: &Operand) -> Result<Node, RuleError> {
+    fn cmp(&mut self, l: &Operand, op: CmpOp, any: bool, r: &Operand) -> Result<Node, RuleError> {
         let (l, r) = (self.operand(l)?, self.operand(r)?);
         if matches!(op, CmpOp::Like | CmpOp::NotLike)
             && !matches!(r, Pre::Flex(..) | Pre::Typed(Term::Param { .. }, ..))
@@ -178,6 +184,15 @@ impl Checker<'_> {
         let like = matches!(op, CmpOp::Like | CmpOp::NotLike);
         let (l, lh) = self.finish(l, ty, false)?;
         let (r, rh) = self.finish(r, ty, like)?;
+        let hops = self.one_path(lh, rh)?;
+        let has_multi = hops
+            .iter()
+            .any(|h| matches!(h, Hop::Multi { .. } | Hop::Junction { .. }));
+        if any && !has_multi {
+            return Err(RuleError::Type(
+                "any-of operators (?=) require a multi-relation field".into(),
+            ));
+        }
         if (is_null(&l, &self.params) || is_null(&r, &self.params))
             && !matches!(op, CmpOp::Eq | CmpOp::Ne)
         {
@@ -186,8 +201,9 @@ impl Checker<'_> {
         Ok(Node::Cmp {
             l,
             op,
+            any,
             r,
-            hops: self.one_path(lh, rh)?,
+            hops,
         })
     }
 
@@ -316,6 +332,11 @@ impl Checker<'_> {
                         .schema
                         .field(self.collection, name)
                         .ok_or_else(|| RuleError::UnknownField(format!("@request.body.{name}")))?;
+                    if matches!(f.kind, FieldKind::Relation { multi: true, .. }) {
+                        return Err(RuleError::Unsupported(
+                            "@request.body on multi-relation fields",
+                        ));
+                    }
                     typed_param(self, Source::Body(f.slot), kind_ty(&f.kind))
                 }
                 ["@collection", ..] => {
@@ -339,6 +360,23 @@ impl Checker<'_> {
             }
             let last = i + 1 == p.len();
             match (&f.kind, last) {
+                (FieldKind::Relation { multi: true, .. }, true) => {
+                    if lower {
+                        return Err(RuleError::Type(":lower only applies to text".into()));
+                    }
+                    self.see(Class::Relational);
+                    hops.push(Hop::Junction {
+                        junction: format!("_rel_{coll}_{name}"),
+                    });
+                    let col = Term::Col {
+                        depth: hops.len(),
+                        junction: true,
+                        column: "target".to_owned(),
+                        slot: f.slot,
+                        lower: false,
+                    };
+                    return Ok(Pre::Typed(col, Ty::Id, hops));
+                }
                 (kind, true) => {
                     let ty = kind_ty(kind);
                     if lower && ty != Ty::Text {
@@ -351,17 +389,25 @@ impl Checker<'_> {
                     });
                     let col = Term::Col {
                         depth: hops.len(),
+                        junction: false,
                         column: (*name).to_owned(),
                         slot: f.slot,
                         lower,
                     };
                     return Ok(Pre::Typed(col, ty, hops));
                 }
-                (FieldKind::Relation { target }, false) => {
-                    hops.push(Hop {
-                        via: (*name).to_owned(),
-                        table: target.clone(),
-                    });
+                (FieldKind::Relation { target, multi }, false) => {
+                    if *multi {
+                        hops.push(Hop::Multi {
+                            junction: format!("_rel_{coll}_{name}"),
+                            table: target.clone(),
+                        });
+                    } else {
+                        hops.push(Hop::Single {
+                            via: (*name).to_owned(),
+                            table: target.clone(),
+                        });
+                    }
                     coll = target.clone();
                 }
                 (FieldKind::Scalar(_), false) => {
@@ -505,37 +551,77 @@ fn renumber(n: &mut Node, pos: &[usize]) {
     }
 }
 
-fn emit(n: &Node, order: &mut Vec<usize>, out: &mut String) {
+fn emit_cmp(l: &Term, op: CmpOp, r: &Term, order: &mut Vec<usize>, out: &mut String) {
+    term(l, order, out);
+    out.push_str(match op {
+        CmpOp::Eq => " IS ",
+        CmpOp::Ne => " IS NOT ",
+        CmpOp::Gt => " > ",
+        CmpOp::Ge => " >= ",
+        CmpOp::Lt => " < ",
+        CmpOp::Le => " <= ",
+        CmpOp::Like => " LIKE ",
+        CmpOp::NotLike => " NOT LIKE ",
+    });
+    term(r, order, out);
+    if matches!(op, CmpOp::Like | CmpOp::NotLike) {
+        out.push_str(" ESCAPE '\\'");
+    }
+}
+
+fn emit(n: &Node, params: &[Param], order: &mut Vec<usize>, out: &mut String) {
     match n {
         Node::True => out.push('1'),
         Node::And(a, b) | Node::Or(a, b) => {
             out.push('(');
-            emit(a, order, out);
+            emit(a, params, order, out);
             out.push_str(if matches!(n, Node::And(..)) {
                 " AND "
             } else {
                 " OR "
             });
-            emit(b, order, out);
+            emit(b, params, order, out);
             out.push(')');
         }
-        Node::Cmp { l, op, r, hops } => with_hops(hops, out, |out| {
-            term(l, order, out);
-            out.push_str(match op {
-                CmpOp::Eq => " IS ",
-                CmpOp::Ne => " IS NOT ",
-                CmpOp::Gt => " > ",
-                CmpOp::Ge => " >= ",
-                CmpOp::Lt => " < ",
-                CmpOp::Le => " <= ",
-                CmpOp::Like => " LIKE ",
-                CmpOp::NotLike => " NOT LIKE ",
-            });
-            term(r, order, out);
-            if matches!(op, CmpOp::Like | CmpOp::NotLike) {
-                out.push_str(" ESCAPE '\\'");
+        Node::Cmp {
+            l,
+            op,
+            any,
+            r,
+            hops,
+        } => {
+            let has_multi = hops
+                .iter()
+                .any(|h| matches!(h, Hop::Multi { .. } | Hop::Junction { .. }));
+            let bare_junction_null = matches!(hops.last(), Some(Hop::Junction { .. }))
+                && (is_null(l, params) || is_null(r, params));
+            if bare_junction_null {
+                // `tags = null` / `tags = ''` (or `?!=`) tests whether the multi-relation is empty;
+                // `tags != null` / `tags != ''` (or `?=`) tests whether it is non-empty.
+                let want_empty = match (op, *any) {
+                    (CmpOp::Eq, false) | (CmpOp::Ne, true) => true,
+                    _ => false,
+                };
+                if want_empty {
+                    out.push_str("NOT ");
+                }
+                with_hops(hops, out, |out| out.push('1'));
+            } else if has_multi && !*any {
+                // Doc 06 §3: on a multi-relation path without `?`, all related rows must
+                // satisfy the condition and the set must be non-empty.
+                out.push('(');
+                with_hops(hops, out, |out| out.push('1'));
+                out.push_str(" AND NOT ");
+                with_hops(hops, out, |out| {
+                    out.push_str("NOT (");
+                    emit_cmp(l, *op, r, order, out);
+                    out.push_str(" IS TRUE)");
+                });
+                out.push(')');
+            } else {
+                with_hops(hops, out, |out| emit_cmp(l, *op, r, order, out));
             }
-        }),
+        }
         Node::In { l, list, hops } => with_hops(hops, out, |out| {
             term(l, order, out);
             out.push_str(" IN (");
@@ -558,15 +644,47 @@ fn with_hops(hops: &[Hop], out: &mut String, body: impl FnOnce(&mut String)) {
     out.push_str("EXISTS (SELECT 1 FROM ");
     for (i, h) in hops.iter().enumerate() {
         let n = i + 1;
+        let prev = if i == 0 {
+            "t".to_owned()
+        } else {
+            format!("r{i}")
+        };
         if i > 0 {
             out.push_str(" JOIN ");
         }
-        let _ = write!(out, "\"{}\" r{n}", h.table);
-        if i > 0 {
-            let _ = write!(out, " ON r{n}.\"id\" = r{}.\"{}\"", i, h.via);
+        match h {
+            Hop::Single { via, table } => {
+                let _ = write!(out, "\"{table}\" r{n}");
+                if i > 0 {
+                    let _ = write!(out, " ON r{n}.\"id\" = {prev}.\"{via}\"");
+                }
+            }
+            Hop::Multi { junction, table } => {
+                let _ = write!(out, "\"{junction}\" j{n}");
+                if i > 0 {
+                    let _ = write!(out, " ON j{n}.\"owner\" = {prev}.\"id\"");
+                }
+                let _ = write!(
+                    out,
+                    " JOIN \"{table}\" r{n} ON r{n}.\"id\" = j{n}.\"target\""
+                );
+            }
+            Hop::Junction { junction } => {
+                let _ = write!(out, "\"{junction}\" j{n}");
+                if i > 0 {
+                    let _ = write!(out, " ON j{n}.\"owner\" = {prev}.\"id\"");
+                }
+            }
         }
     }
-    let _ = write!(out, " WHERE r1.\"id\" = t.\"{}\" AND ", hops[0].via);
+    match &hops[0] {
+        Hop::Single { via, .. } => {
+            let _ = write!(out, " WHERE r1.\"id\" = t.\"{via}\" AND ");
+        }
+        Hop::Multi { .. } | Hop::Junction { .. } => {
+            out.push_str(" WHERE j1.\"owner\" = t.\"id\" AND ");
+        }
+    }
     body(out);
     out.push(')');
 }
@@ -575,12 +693,15 @@ fn term(t: &Term, order: &mut Vec<usize>, out: &mut String) {
     let (lower, s) = match t {
         Term::Col {
             depth,
+            junction,
             column,
             lower,
             ..
         } => {
             let alias = if *depth == 0 {
                 "t".to_owned()
+            } else if *junction {
+                format!("j{depth}")
             } else {
                 format!("r{depth}")
             };
