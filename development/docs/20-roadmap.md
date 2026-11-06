@@ -42,6 +42,8 @@ measured numbers; budgets in [16](16-performance-engineering.md) revised with da
 - Sync pull/push, conflict policies, device registry, bootstrap.
 - Files (local + S3), thumbnails.
 - Backups: snapshots, WAL shipping, restore (new app / in place), policies.
+- Encryption at rest (opt-in, gated on the encrypted S1/S3 benchmark) and keyed
+  backup/restore: KEK/DEK envelope, age-encrypted archives ([09 B4](09-sync-and-backup.md)).
 - SDK offline sync (TS IndexedDB/SQLite, Dart SQLite).
 - Pilot app integration.
 

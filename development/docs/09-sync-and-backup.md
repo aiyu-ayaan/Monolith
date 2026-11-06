@@ -116,7 +116,54 @@ encrypt       = true               # age/XChaCha20 with app backup key
   swapped atomically, `AppRuntime` reloads. Other apps unaffected.
 - Clients with cursors beyond the restored `seq` receive `410` → bootstrap resync.
 
-### B4. Cross-app "backup hub" use case
+### B4. Encryption at rest and keys (feature scope, Phase 3)
+
+Status: **scoped, not built.** Goal: a stolen `/data` volume, disk image or backup
+archive reveals no app data, and backup/restore works across servers with keys the
+operator controls.
+
+**Engine.** Page-level encryption inside SQLite, so WAL, snapshots and temp files are
+covered too. Candidates: SQLCipher (AES-256-CBC + HMAC-SHA512 per page) and
+SQLite3MultipleCiphers (ChaCha20-Poly1305, SQLCipher-compatible mode). Both work with
+rusqlite. Pages decrypt only when they enter the page cache, so cached reads cost nothing
+extra. **Hypothesis, not measured:** 5–15% on cold reads and commits. The Phase 0
+harness runs S1/S3 with encryption on and off before this ships; until then it stays
+opt-in and off by default (performance-first, CLAUDE.md). On the Postgres fallback,
+use volume encryption (LUKS/dm-crypt); community Postgres has no TDE.
+
+**Key hierarchy (envelope encryption).**
+
+| Key | What | Stored |
+|-----|------|--------|
+| KEK (master key) | 256-bit, wraps every DEK | Never in `/data`. A file mounted from outside the volume (`--master-key-file`, e.g. a Docker/K8s secret on tmpfs) or a KMS (later). Not an env var |
+| System DEK | Encrypts `system.db` | `/data/keys/system.dek`, wrapped by the KEK (XChaCha20-Poly1305) |
+| App DEK | One per app, encrypts `apps/<app>/data.db` | `system.db` table `app_keys(app, wrapped_dek, kek_id, created)` |
+| Backup key | age X25519 key pair per server (or per app) | Public key on the server; private key shown **once** at creation, kept offline by the operator |
+
+- Enabling: chosen at first start (`--encrypt`), shown in the installer page. A plain
+  server converts with `monolith encrypt` (per app `sqlcipher_export`, app in
+  maintenance). Never toggled silently.
+- KEK rotation: re-wrap the DEKs only (fast, no data rewrite).
+- DEK rotation: `PRAGMA rekey` per app (rewrites the file; maintenance window, 503 for
+  that app only).
+- Lost KEK and lost backup private key = unrecoverable data. The UI and docs must say so
+  before enabling.
+
+**Backup with keys.** A snapshot of an encrypted DB is already ciphertext under its
+DEK. The archive (`tar.zst`) is then encrypted to the backup public key (age) and its
+manifest carries the app DEK wrapped to the same recipient. The server can write
+backups but cannot read old ones without the offline private key.
+
+**Restore with keys.** The operator supplies the backup private key for the duration
+of the restore only (upload or `--backup-identity` file; never persisted). The server
+unwraps the DEK, re-wraps it with its own KEK, and restores into a new app or in place
+(B3). This also moves an encrypted app to another server.
+
+**Done when:** encrypted S1/S3 numbers recorded in doc 17; restore of an encrypted
+snapshot onto a second server passes; wrong/missing key gives a clear error and leaves
+the target untouched; key rotation tests for KEK and DEK.
+
+### B5. Cross-app "backup hub" use case
 
 Any external app (not built on Monolith) can push its data into a Monolith app for
 safekeeping using the plug-and-play API: create an app `myapp-archive`, create a key

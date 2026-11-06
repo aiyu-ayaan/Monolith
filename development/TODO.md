@@ -76,8 +76,13 @@ Next: Phase 1 follow-ups below, then the exit gates.
 - [x] Admin UI v0 (`ui/`, 18 KB gzip JS): login, apps, collection schema editor, records grid
       (filter, sort, cursor paging, JSON create/edit/delete). CI typechecks and builds it
 - [x] `agent-skills/monolith-rest` + `monolith-rules`: "implemented today" sections
-- [ ] Manual check in a browser: `pnpm build:ui && MONOLITH_ADMIN_EMAIL=… MONOLITH_ADMIN_PASSWORD=… pnpm server:dev`,
-      open http://localhost:8090/_/ (not run yet: starting servers on the host needs owner OK)
+- [x] First superuser via one-time installer link (PocketBase-style): `GET/POST /api/v1/system/install`,
+      256-bit token in memory, 1 h TTL, single use; env credential bootstrap removed
+- [x] Admin UI redesign (PocketBase layout): icon rail, collections sidebar, records grid, schema and
+      record drawers, typed record form, install page, light/dark tokens, no external assets (27 KB gzip JS)
+- [ ] Manual check in a browser: `pnpm build:ui && pnpm server:dev`, open the printed setup link
+      (not run yet: starting servers on the host needs owner OK)
+- [ ] `monolith superuser create` CLI for headless setup (doc 18)
 - [x] Phase 1 REST & debug follow-ups: single-relation `expand` (up to 4 hops, 1 batched query per relation per level),
       `total=none|exact|estimate`, `GET .../records:count`, `If-Match`/`ETag`/`If-None-Match` (`412`/`304`),
       `PUT` upsert, `?dry_run=true` savepoint rollback, `POST .../collections:diff`, `POST .../rules:explain`,
@@ -96,5 +101,6 @@ Next: Phase 1 follow-ups below, then the exit gates.
 - [ ] Fill `api/openapi` + `api/asyncapi` + conformance vectors (contract first)
 - [ ] Phase 2: auth, API keys, realtime, rate limiting, TS + Dart SDK v0
 - [ ] Phase 3: sync, files, backups, pilot app
+- [ ] Phase 3: encryption at rest + keyed backup/restore (`docs/09` B4); first add encrypted S1/S3 runs to the Phase 0 harness
 - [ ] Phase 4: OpenAPI + MCP, analytics, webhooks, WASM plugins, full admin UI
 - [ ] Phase 5: PocketBase importer, Kotlin/Swift SDKs, passkeys, replicas

@@ -13,8 +13,9 @@
 | Files | Malicious uploads, image bombs | MIME sniffing, size limits, pixel limit before decode, no execution, `Content-Disposition` + `nosniff`, separate download origin option |
 | Server | Resource exhaustion | Bounded queues, body limits, connection limits per IP/app, per-app quotas |
 | Plugins | Malicious/buggy WASM | Sandbox, capabilities manifest, fuel/epoch limits, memory caps |
-| Backups | Exposure | Encrypted archives, separate backup key, signed download URLs |
-| Secrets at rest | DB file theft | Envelope encryption of signing keys, OAuth secrets, SMTP/S3 creds with master key |
+| Backups | Exposure | Archives encrypted to an offline age backup key; DEK travels wrapped in the manifest; signed download URLs ([09 B4](09-sync-and-backup.md)) |
+| Secrets at rest | DB file / volume theft | Optional page-level DB encryption (SQLCipher-class) with per-app DEKs wrapped by a KEK kept off the volume; envelope encryption of signing keys, OAuth secrets, SMTP/S3 creds ([09 B4](09-sync-and-backup.md)) |
+| Superuser bootstrap | Credentials in env/config | One-time installer link printed at start-up (256-bit, memory only, 1 h, single use); no credentials in env ([18](18-deployment.md)) |
 | Superuser | Account takeover | Mandatory MFA option, IP allowlist for `/_/` and `/api/v1/system`, audit log |
 | SQL console | Abuse | Superuser only, read-only by default (`query_only` connection), timeout, row cap |
 
