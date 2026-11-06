@@ -78,6 +78,8 @@ fn insert_op(sql: &Arc<str>, body: &Arc<str>) -> WriteOp {
             fields: None,
             sql: sql.clone(),
             params: vec![Value::Blob(id.into()), Value::Text(body.as_ref().into())],
+            seq_slot: None,
+            hlc_slot: None,
         }],
     }
 }

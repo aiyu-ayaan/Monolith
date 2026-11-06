@@ -58,6 +58,10 @@ pub struct Mutation {
     pub fields: Option<u64>,
     pub sql: Arc<str>,
     pub params: Vec<Value>,
+    /// Param index the writer overwrites with this mutation's seq (the `_v` column).
+    pub seq_slot: Option<usize>,
+    /// Param index the writer overwrites with this mutation's HLC (the `_hlc` column).
+    pub hlc_slot: Option<usize>,
 }
 
 /// All mutations of one `WriteOp` commit or fail together.
@@ -68,10 +72,12 @@ pub struct WriteOp {
 }
 
 /// The op's mutations got the contiguous seqs `first_seq..=last_seq`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WriteResult {
     pub first_seq: u64,
     pub last_seq: u64,
+    /// Rows from `RETURNING` clauses, in mutation order.
+    pub returned: Vec<Row>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,9 +120,12 @@ pub enum Error {
     Busy,
     #[error("store closed")]
     Closed,
-    /// Update or delete matched no row.
+    /// The mutation changed no row: missing record or a rule in its WHERE rejected it.
     #[error("record not found")]
     NotFound,
+    /// UNIQUE, PRIMARY KEY, NOT NULL, CHECK or FOREIGN KEY violation.
+    #[error("constraint violation: {0}")]
+    Constraint(String),
     #[error("invalid request: {0}")]
     Invalid(&'static str),
     #[error("engine error: {0}")]

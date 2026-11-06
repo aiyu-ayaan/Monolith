@@ -39,6 +39,8 @@ fn mutation(op: Op, sql: &Arc<str>, id: [u8; 16], n: i64) -> Mutation {
         fields: None,
         sql: sql.clone(),
         params: vec![Value::Blob(id.into()), Value::Int(n)],
+        seq_slot: None,
+        hlc_slot: None,
     }
 }
 
@@ -110,7 +112,7 @@ async fn bad_op_does_not_poison_the_batch() {
         .store
         .write(single(mutation(Op::Insert, &f.insert, new_id(), 4)));
     let (dup, missing, good) = tokio::join!(dup, missing, good);
-    assert!(matches!(dup, Err(Error::Engine(_))));
+    assert!(matches!(dup, Err(Error::Constraint(_))));
     assert!(matches!(missing, Err(Error::NotFound)));
     assert_eq!(good.unwrap().first_seq, 2, "failed ops must not burn seqs");
 
@@ -231,4 +233,28 @@ async fn futures_join<T>(tasks: Vec<tokio::task::JoinHandle<T>>) -> Vec<T> {
         out.push(t.await.unwrap());
     }
     out
+}
+
+#[tokio::test]
+async fn writer_stamps_seq_and_returns_rows() {
+    let f = fixture(SqliteConfig::default()).await;
+    let sql: Arc<str> = "INSERT INTO t (id, n) VALUES (?1, ?2) RETURNING n".into();
+    let mut m = mutation(Op::Insert, &sql, new_id(), 0);
+    m.seq_slot = Some(1); // n := seq
+    let r = f.store.write(single(m)).await.unwrap();
+    assert_eq!(r.returned, vec![vec![Value::Int(1)]]);
+
+    // A rule in the WHERE that rejects the row reads as NotFound and burns no seq.
+    let guarded: Arc<str> = "INSERT INTO t (id, n) SELECT ?1, ?2 WHERE 0".into();
+    let r = f
+        .store
+        .write(single(mutation(Op::Insert, &guarded, new_id(), 5)))
+        .await;
+    assert!(matches!(r, Err(Error::NotFound)));
+    let r = f
+        .store
+        .write(single(mutation(Op::Insert, &f.insert, new_id(), 6)))
+        .await
+        .unwrap();
+    assert_eq!(r.first_seq, 2);
 }

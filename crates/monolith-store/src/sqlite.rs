@@ -99,7 +99,10 @@ pub struct SqliteStore {
 
 impl From<rusqlite::Error> for Error {
     fn from(e: rusqlite::Error) -> Self {
-        Error::Engine(e.to_string())
+        match e.sqlite_error_code() {
+            Some(rusqlite::ErrorCode::ConstraintViolation) => Error::Constraint(e.to_string()),
+            _ => Error::Engine(e.to_string()),
+        }
     }
 }
 
@@ -371,10 +374,10 @@ impl Writer {
             let n_changes = changes.len();
             let sp = self.conn.execute_batch("SAVEPOINT op");
             let reply = match m {
-                WriterMsg::Write(op, tx) => {
+                WriterMsg::Write(mut op, tx) => {
                     let r = sp
                         .map_err(Error::from)
-                        .and_then(|()| self.apply(&op, ts, changes));
+                        .and_then(|()| self.apply(&mut op, ts, changes));
                     Reply::Write(tx, r)
                 }
                 WriterMsg::Schema(plan, tx) => {
@@ -430,19 +433,40 @@ impl Writer {
         replies.drain(..).for_each(|r| r.fail(&msg));
     }
 
-    fn apply(&mut self, op: &WriteOp, ts: i64, changes: &mut Vec<Change>) -> Result<WriteResult> {
+    fn apply(
+        &mut self,
+        op: &mut WriteOp,
+        ts: i64,
+        changes: &mut Vec<Change>,
+    ) -> Result<WriteResult> {
         let first_seq = self.next_seq;
-        for m in &op.mutations {
-            let n = self
-                .conn
-                .prepare_cached(&m.sql)?
-                .execute(params_from_iter(m.params.iter()))?;
-            if n == 0 && m.op != Op::Insert {
+        let mut returned = Vec::new();
+        for m in &mut op.mutations {
+            let seq = self.next_seq;
+            let hlc = next_hlc(self.hlc, ts);
+            for (slot, v) in [(m.seq_slot, seq as i64), (m.hlc_slot, hlc as i64)] {
+                if let Some(p) = slot.and_then(|i| m.params.get_mut(i)) {
+                    *p = Value::Int(v);
+                }
+            }
+            {
+                let mut stmt = self.conn.prepare_cached(&m.sql)?;
+                let cols = stmt.column_count();
+                let mut rows = stmt.query(params_from_iter(m.params.iter()))?;
+                while let Some(r) = rows.next()? {
+                    let mut row = Vec::with_capacity(cols);
+                    for i in 0..cols {
+                        row.push(to_value(r.get_ref(i)?));
+                    }
+                    returned.push(row);
+                }
+            }
+            // Zero rows: missing record, or a rule in the statement's WHERE said no.
+            if self.conn.changes() == 0 {
                 return Err(Error::NotFound);
             }
-            let seq = self.next_seq;
             self.next_seq += 1;
-            self.hlc = next_hlc(self.hlc, ts);
+            self.hlc = hlc;
             self.conn.prepare_cached(INSERT_CHANGE)?.execute((
                 seq as i64,
                 ts,
@@ -467,6 +491,7 @@ impl Writer {
         Ok(WriteResult {
             first_seq,
             last_seq: self.next_seq - 1,
+            returned,
         })
     }
 }
