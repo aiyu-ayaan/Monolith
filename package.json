@@ -21,6 +21,7 @@
     "rust:lint": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
     "rust:bench": "cargo bench --workspace",
     "rust:bench:build": "cargo bench --workspace --no-run",
-    "rust:deny": "cargo deny check"
+    "rust:deny": "cargo deny check",
+    "bench:engine": "cargo run --release -p monolith-bench --"
   }
 }
