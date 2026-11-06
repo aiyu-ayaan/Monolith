@@ -159,25 +159,23 @@ Every record table is created `STRICT, WITHOUT ROWID` with a 16-byte UUIDv7 prim
 All JavaScript/TypeScript and Rust commands run through root `pnpm` scripts:
 
 ```bash
-pnpm setup                  # install JS/TS workspace dependencies (ui, sdks/typescript, examples)
+pnpm install                # install JS/TS workspace dependencies (ui, sdks/typescript, examples)
 
-# Start the Rust server on http://0.0.0.0:8090
-pnpm server:dev
-
-# In another terminal, run the SolidJS admin UI dev server (proxies /api to :8090)
-pnpm dev:ui
+pnpm dev                    # backend (:8090) + admin UI (:5173) together; Ctrl-C stops both
+# or separately:
+pnpm dev:server             # Rust server on http://0.0.0.0:8090
+pnpm dev:ui                 # SolidJS admin UI dev server (proxies /api to :8090)
 ```
 
-Open `http://localhost:5173/_/` in development (or `http://127.0.0.1:8090/_/` when `ui/dist` is built and embedded into the server binary).
+Open `http://localhost:5173/_/` in development (or `http://127.0.0.1:8090/_/` when `ui/dist` is built and embedded into the server binary). `pnpm dev` also prints the first-superuser setup link rewritten for the dev UI port.
 
 ## Build and run in production
 
 ```bash
-pnpm build:ui               # builds ui/dist (embedded into monolith-server via rust-embed)
-pnpm rust:release           # cargo build --release --workspace (LTO=fat, codegen-units=1)
+pnpm build:release          # JS/TS packages (ui/dist is embedded via rust-embed) + cargo build --release (LTO=fat)
 MONOLITH_DATA=/var/lib/monolith \
 MONOLITH_ADDR=0.0.0.0:8090 \
-pnpm server:release
+pnpm start                  # builds the UI, then runs the release server
 ```
 
 ### First superuser
@@ -280,11 +278,12 @@ development/                22 architecture & design docs (development/docs/) an
 ## Tests, linting and benchmarks
 
 ```bash
+pnpm test                   # JS/TS tests (@monolith/client) + cargo test
+pnpm lint                   # cargo fmt check + clippy -D warnings + UI typecheck
 pnpm rust:test              # cargo test --workspace (store, rules differential suite, auth, core, HTTP server)
 pnpm rust:lint              # cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
-pnpm test                   # run tests across JS/TS workspace packages (@monolith/client)
 pnpm typecheck:ui           # tsc --noEmit for the SolidJS admin UI
-pnpm build                  # build all JS/TS packages (ui + TypeScript SDK)
+pnpm build                  # all JS/TS packages (ui + TypeScript SDK) + Rust debug build
 pnpm rust:bench:build       # compile Criterion micro-benchmarks without running them
 ```
 

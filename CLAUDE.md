@@ -86,7 +86,7 @@ REST and WebSocket must stay complete without an SDK.
 - Tests: unit tests next to code, integration tests in `crates/*/tests`, SDK
   conformance tests against a real server container.
 - JS/TS monorepo managed with `pnpm` workspaces (`ui`, `sdks/typescript`, `examples/web-typescript`).
-  Root `pnpm setup` or `pnpm install` sets up all JS/TS projects.
+  Root `pnpm install` sets up all JS/TS projects.
 - Run every project task through root `pnpm` scripts, Rust included (`pnpm rust:*`
   wrap cargo). Add a script to `package.json` instead of documenting a raw command.
 - Commit at each completed stage of work (one logical change per commit). Use
@@ -96,24 +96,32 @@ REST and WebSocket must stay complete without an SDK.
 ## Commands
 
 ```bash
-# JS/TS workspace
-pnpm setup                            # or `pnpm install` — initialises all JS/TS projects
-pnpm dev:ui                           # admin UI dev server (proxies /api to :8090)
-pnpm typecheck:ui                     # tsc --noEmit for the admin UI
-pnpm build                            # builds all JS/TS workspace projects
-pnpm test                             # runs tests across JS/TS packages
+pnpm install                          # set up all JS/TS projects (`pnpm setup` is a pnpm built-in, not our script)
 
-# Rust backend (cargo wrapped by pnpm scripts)
-pnpm rust:build                       # debug build of the workspace
-pnpm rust:release                     # release build (lto=fat)
+# Everyday
+pnpm dev                              # backend + admin UI together (tools/dev.mjs); Ctrl-C stops both
+pnpm dev:server                       # backend only (env: MONOLITH_DATA, MONOLITH_ADDR);
+                                      # first start prints a one-time superuser setup link
+pnpm dev:ui                           # admin UI only (Vite :5173, proxies /api to :8090)
+pnpm build                            # JS/TS packages + Rust debug build
+pnpm build:release                    # JS/TS packages + Rust release build (lto=fat)
+pnpm start                            # build the UI, run the release server
+pnpm test                             # JS/TS tests + cargo test
+pnpm lint                             # Rust fmt check + clippy -D warnings + UI typecheck
+pnpm fmt                              # cargo fmt
+
+# Granular
+pnpm build:js | build:ui | build:sdk  # JS/TS builds (all | admin UI | SDK)
+pnpm test:js | test:sdk               # JS/TS tests (all | SDK)
+pnpm typecheck:ui                     # tsc --noEmit for the admin UI
+pnpm rust:build | rust:release        # cargo build (debug | release)
 pnpm rust:test                        # cargo test --workspace
-pnpm rust:lint                        # fmt check + clippy -D warnings
-pnpm rust:fmt                         # format
+pnpm rust:lint | rust:fmt             # fmt check + clippy | format
 pnpm rust:bench:build                 # compile benches only
 pnpm rust:bench                       # run benches (ask the owner before running on the host)
+pnpm bench:engine                     # engine bake-off harness (ask the owner before running on the host)
 pnpm rust:deny                        # cargo-deny (needs `cargo install cargo-deny`)
-pnpm server:dev                       # run the server (env: MONOLITH_DATA, MONOLITH_ADDR);
-                                      # first start prints a one-time superuser setup link
+pnpm clean                            # remove dist and node_modules in all JS/TS packages
 ```
 
 ## Reference material

@@ -6,14 +6,21 @@
   "packageManager": "pnpm@12.4.2",
   "scripts": {
     "setup": "pnpm install",
-    "init": "pnpm install",
-    "build": "pnpm -r run build",
+    "dev": "node tools/dev.mjs",
+    "dev:server": "cargo run -p monolith-server",
     "dev:ui": "pnpm --filter @monolith/ui dev",
+    "build": "pnpm build:js && pnpm rust:build",
+    "build:release": "pnpm build:js && pnpm rust:release",
+    "build:js": "pnpm -r run build",
     "build:ui": "pnpm --filter @monolith/ui build",
     "build:sdk": "pnpm --filter @monolith/client build",
-    "test": "pnpm -r run test",
+    "start": "pnpm build:ui && cargo run --release -p monolith-server",
+    "test": "pnpm test:js && pnpm rust:test",
+    "test:js": "pnpm -r run test",
     "test:sdk": "pnpm --filter @monolith/client test",
-    "clean": "pnpm -r --parallel exec rm -rf dist node_modules",
+    "lint": "pnpm rust:lint && pnpm typecheck:ui",
+    "fmt": "pnpm rust:fmt",
+    "typecheck:ui": "pnpm --filter @monolith/ui typecheck",
     "rust:build": "cargo build --workspace",
     "rust:release": "cargo build --release --workspace",
     "rust:test": "cargo test --workspace",
@@ -23,8 +30,6 @@
     "rust:bench:build": "cargo bench --workspace --no-run",
     "rust:deny": "cargo deny check",
     "bench:engine": "cargo run --release -p monolith-bench --",
-    "server:dev": "cargo run -p monolith-server",
-    "server:release": "cargo run --release -p monolith-server",
-    "typecheck:ui": "pnpm --filter @monolith/ui typecheck"
+    "clean": "pnpm -r --parallel exec rm -rf dist node_modules"
   }
 }

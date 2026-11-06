@@ -39,7 +39,7 @@ grids, log tail, analytics counters). JSX + TypeScript keeps the code familiar.
 | Icons | Inline SVG sprite (tree-shaken) |
 | Realtime | Same TS SDK used by apps (dogfooding via `workspace:*`) |
 
-Managed as `@monolith/ui` in the root `pnpm` monorepo workspace. Dev: `pnpm dev:ui`;
+Managed as `@monolith/ui` in the root `pnpm` monorepo workspace. Dev: `pnpm dev` (backend + UI) or `pnpm dev:ui` alone;
 build: `pnpm --filter @monolith/ui build` (or `pnpm build` across workspace).
 
 ## 4. Delivery

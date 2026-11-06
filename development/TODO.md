@@ -70,7 +70,7 @@ Next: Phase 1 follow-ups below, then the exit gates.
 - [x] `crates/monolith-core`: schema + compiled templates per version, migration planner,
       schema-driven JSON codec, keyset list (NULL-aware cursors, plan cache), records CRUD + batch,
       `Registry` (system.db, apps, superusers, token key). 11 tests incl. filter vectors
-- [x] `crates/monolith-server` (`pnpm server:dev`): axum routes per the OpenAPI contract,
+- [x] `crates/monolith-server` (`pnpm dev:server`): axum routes per the OpenAPI contract,
       problem+json with request id, `X-Request-Id` echo, 1 MiB limit (413), bearer superuser auth,
       env config + first-superuser bootstrap, embedded admin UI at `/_/`. 3 in-process HTTP tests
 - [x] Admin UI v0 (`ui/`, 18 KB gzip JS): login, apps, collection schema editor, records grid
@@ -80,7 +80,7 @@ Next: Phase 1 follow-ups below, then the exit gates.
       256-bit token in memory, 1 h TTL, single use; env credential bootstrap removed
 - [x] Admin UI redesign (PocketBase layout): icon rail, collections sidebar, records grid, schema and
       record drawers, typed record form, install page, light/dark tokens, no external assets (27 KB gzip JS)
-- [ ] Manual check in a browser: `pnpm build:ui && pnpm server:dev`, open the printed setup link
+- [ ] Manual check in a browser: `pnpm dev`, open the printed setup link
       (not run yet: starting servers on the host needs owner OK)
 - [ ] `monolith superuser create` CLI for headless setup (doc 18)
 - [x] Phase 1 REST & debug follow-ups: single-relation `expand` (up to 4 hops, 1 batched query per relation per level),

@@ -82,10 +82,10 @@ feature. SDKs add convenience: session refresh, typed models, offline store, rec
 
 All JS/TS packages (`ui/`, `sdks/typescript/`, `examples/web-typescript/`) are unified
 under a root `pnpm` monorepo workspace (`pnpm-workspace.yaml`).
-- Root init / setup: `pnpm setup` or `pnpm install` initializes all projects at once.
+- Root init: `pnpm install` initializes all projects at once.
 - Inter-package dependencies use `workspace:*` (e.g. `@monolith/ui` and web examples
   consume `@monolith/client` directly from the tree).
-- Common tasks: `pnpm build`, `pnpm test`, `pnpm dev:ui`.
+- Common tasks: `pnpm dev` (backend + UI), `pnpm build`, `pnpm test`, `pnpm lint`; Rust under `pnpm rust:*`.
 
 ### TypeScript (npm: `@monolith/client`)
 
