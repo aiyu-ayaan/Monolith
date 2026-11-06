@@ -140,6 +140,8 @@ pub type ChangeBatch = Arc<[Change]>;
 pub trait AppStore: Send + Sync {
     /// Runs through the single writer; batched with concurrent writes (group commit).
     fn write(&self, op: WriteOp) -> impl Future<Output = Result<WriteResult>> + Send;
+    /// Runs `op` inside a rolled-back savepoint, returning what `write` would have produced.
+    fn write_dry_run(&self, op: WriteOp) -> impl Future<Output = Result<WriteResult>> + Send;
     fn query(&self, q: Query) -> impl Future<Output = Result<Vec<Row>>> + Send;
     /// Changes with `seq > after`, ascending, at most `limit`.
     fn changes_since(

@@ -5,9 +5,11 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
+use crossbeam_channel::{
+    Receiver, RecvTimeoutError, SendTimeoutError, Sender, TrySendError, bounded,
+};
 use rusqlite::types::{ToSqlOutput, ValueRef};
 use rusqlite::{Connection, OpenFlags, ToSql, params_from_iter};
 use tokio::sync::{broadcast, oneshot};
@@ -29,6 +31,10 @@ pub struct SqliteConfig {
     /// Only applies when the file is created.
     pub page_size: u32,
     pub change_bus: usize,
+    /// Bounded wait when the reader queue is full or a reader hits a lock (doc 03 §10, doc 06 §8).
+    pub read_timeout: Duration,
+    /// Idle period before the writer runs a passive WAL checkpoint.
+    pub idle_checkpoint: Duration,
 }
 
 impl Default for SqliteConfig {
@@ -42,6 +48,8 @@ impl Default for SqliteConfig {
             durability_full: false,
             page_size: 4096,
             change_bus: 1024,
+            read_timeout: Duration::from_secs(2),
+            idle_checkpoint: Duration::from_secs(30),
         }
     }
 }
@@ -84,7 +92,11 @@ const SELECT_CHANGES: &str = "SELECT seq, ts, coll, rid, op, hlc, actor, fields 
 const STMT_CACHE: usize = 256;
 
 enum WriterMsg {
-    Write(WriteOp, oneshot::Sender<Result<WriteResult>>),
+    Write {
+        op: WriteOp,
+        dry_run: bool,
+        tx: oneshot::Sender<Result<WriteResult>>,
+    },
     Schema(MigrationPlan, oneshot::Sender<Result<()>>),
 }
 
@@ -95,6 +107,7 @@ pub struct SqliteStore {
     writer: Sender<WriterMsg>,
     readers: Sender<ReadJob>,
     bus: broadcast::Sender<ChangeBatch>,
+    read_timeout: Duration,
 }
 
 impl From<rusqlite::Error> for Error {
@@ -175,6 +188,7 @@ impl SqliteStore {
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?;
             c.execute_batch(SHARED_PRAGMAS)?;
+            c.busy_timeout(cfg.read_timeout)?;
             c.set_prepared_statement_cache_capacity(STMT_CACHE);
             reader_conns.push(c);
         }
@@ -187,6 +201,7 @@ impl SqliteStore {
             conn,
             bus: bus.clone(),
             max_batch: cfg.max_batch,
+            idle_checkpoint: cfg.idle_checkpoint,
             next_seq: last_seq as u64 + 1,
             hlc: last_hlc as u64,
         };
@@ -199,6 +214,7 @@ impl SqliteStore {
             writer,
             readers,
             bus,
+            read_timeout: cfg.read_timeout,
         })
     }
 
@@ -210,8 +226,21 @@ impl SqliteStore {
         let job: ReadJob = Box::new(move |c| {
             let _ = tx.send(f(c));
         });
-        // shortcut: fails fast when the pool queue is full; doc 03 §10 wants a bounded wait (read_timeout) first.
-        self.readers.try_send(job).map_err(send_err)?;
+        match self.readers.try_send(job) {
+            Ok(()) => {}
+            Err(TrySendError::Full(job)) if !self.read_timeout.is_zero() => {
+                let readers = self.readers.clone();
+                let timeout = self.read_timeout;
+                tokio::task::spawn_blocking(move || match readers.send_timeout(job, timeout) {
+                    Ok(()) => Ok(()),
+                    Err(SendTimeoutError::Timeout(_)) => Err(Error::Busy),
+                    Err(SendTimeoutError::Disconnected(_)) => Err(Error::Closed),
+                })
+                .await
+                .map_err(|_| Error::Closed)??;
+            }
+            Err(e) => return Err(send_err(e)),
+        }
         rx.await.map_err(|_| Error::Closed)?
     }
 
@@ -301,7 +330,7 @@ impl Reply {
     /// Placeholder for an op that never ran; it is always `fail`ed.
     fn unrun(m: WriterMsg) -> Self {
         match m {
-            WriterMsg::Write(_, tx) => Reply::Write(tx, Err(Error::Closed)),
+            WriterMsg::Write { tx, .. } => Reply::Write(tx, Err(Error::Closed)),
             WriterMsg::Schema(_, tx) => Reply::Schema(tx, Err(Error::Closed)),
         }
     }
@@ -325,17 +354,36 @@ struct Writer {
     conn: Connection,
     bus: broadcast::Sender<ChangeBatch>,
     max_batch: usize,
+    idle_checkpoint: Duration,
     next_seq: u64,
     hlc: u64,
 }
 
 impl Writer {
-    // shortcut: a panic here ends the writer and later writes get Closed; doc 03 §10 restarts it.
     fn run(mut self, rx: Receiver<WriterMsg>) {
         let mut batch = Vec::with_capacity(self.max_batch);
         let mut replies = Vec::with_capacity(self.max_batch);
         let mut changes = Vec::new();
-        while let Ok(first) = rx.recv() {
+        let mut dirty = false;
+        loop {
+            let first = if dirty && !self.idle_checkpoint.is_zero() {
+                match rx.recv_timeout(self.idle_checkpoint) {
+                    Ok(m) => m,
+                    Err(RecvTimeoutError::Timeout) => {
+                        let _ = self
+                            .conn
+                            .execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;");
+                        dirty = false;
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match rx.recv() {
+                    Ok(m) => m,
+                    Err(_) => break,
+                }
+            };
             batch.push(first);
             while batch.len() < self.max_batch {
                 match rx.try_recv() {
@@ -343,7 +391,31 @@ impl Writer {
                     Err(_) => break,
                 }
             }
-            self.commit_batch(&mut batch, &mut replies, &mut changes);
+            // Recover from a panicking batch by rolling back and resyncing seq/hlc from disk.
+            if catch_unwind(AssertUnwindSafe(|| {
+                self.commit_batch(&mut batch, &mut replies, &mut changes);
+            }))
+            .is_err()
+            {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                if let Ok((s, h)) = self.conn.query_row(
+                    "SELECT coalesce(max(seq), 0), coalesce(max(hlc), 0) FROM _changes",
+                    [],
+                    |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)),
+                ) {
+                    self.next_seq = s as u64 + 1;
+                    self.hlc = h as u64;
+                }
+                changes.clear();
+                batch
+                    .drain(..)
+                    .for_each(|m| Reply::unrun(m).fail("writer panic recovered"));
+                replies
+                    .drain(..)
+                    .for_each(|r| r.fail("writer panic recovered"));
+            } else {
+                dirty = true;
+            }
         }
     }
 
@@ -373,8 +445,14 @@ impl Writer {
             let hlc = self.hlc;
             let n_changes = changes.len();
             let sp = self.conn.execute_batch("SAVEPOINT op");
+            let mut dry_run = false;
             let reply = match m {
-                WriterMsg::Write(mut op, tx) => {
+                WriterMsg::Write {
+                    mut op,
+                    dry_run: dry,
+                    tx,
+                } => {
+                    dry_run = dry;
                     let r = sp
                         .map_err(Error::from)
                         .and_then(|()| self.apply(&mut op, ts, changes));
@@ -391,7 +469,7 @@ impl Writer {
                 }
             };
             let ok = matches!(&reply, Reply::Write(_, Ok(_)) | Reply::Schema(_, Ok(())));
-            let end = if ok {
+            let end = if ok && !dry_run {
                 self.conn.execute_batch("RELEASE op")
             } else {
                 self.next_seq = seq;
@@ -501,7 +579,24 @@ impl AppStore for SqliteStore {
         if op.mutations.is_empty() {
             return Err(Error::Invalid("write has no mutations"));
         }
-        self.send_write(|tx| WriterMsg::Write(op, tx)).await
+        self.send_write(|tx| WriterMsg::Write {
+            op,
+            dry_run: false,
+            tx,
+        })
+        .await
+    }
+
+    async fn write_dry_run(&self, op: WriteOp) -> Result<WriteResult> {
+        if op.mutations.is_empty() {
+            return Err(Error::Invalid("write has no mutations"));
+        }
+        self.send_write(|tx| WriterMsg::Write {
+            op,
+            dry_run: true,
+            tx,
+        })
+        .await
     }
 
     async fn query(&self, q: Query) -> Result<Vec<Row>> {

@@ -258,3 +258,40 @@ async fn writer_stamps_seq_and_returns_rows() {
         .unwrap();
     assert_eq!(r.first_seq, 2);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn dry_run_returns_rows_without_committing() {
+    let f = fixture(SqliteConfig {
+        idle_checkpoint: std::time::Duration::from_millis(10),
+        ..SqliteConfig::default()
+    })
+    .await;
+    let mut bus = f.store.subscribe();
+    let sql: Arc<str> = "INSERT INTO t (id, n) VALUES (?1, ?2) RETURNING n".into();
+    let id = new_id();
+    let mut m = mutation(Op::Insert, &sql, id, 0);
+    m.seq_slot = Some(1);
+    let r = f.store.write_dry_run(single(m)).await.unwrap();
+    assert_eq!(r.first_seq, 1);
+    assert_eq!(r.returned, vec![vec![Value::Int(1)]]);
+
+    // Nothing was persisted, no change was logged, and the next real write still gets seq 1.
+    assert!(f.store.changes_since(0, 10).await.unwrap().is_empty());
+    assert!(bus.try_recv().is_err());
+    let rows = f
+        .store
+        .query(Query {
+            sql: "SELECT n FROM t".into(),
+            params: vec![],
+        })
+        .await
+        .unwrap();
+    assert!(rows.is_empty());
+
+    let real = f
+        .store
+        .write(single(mutation(Op::Insert, &f.insert, id, 99)))
+        .await
+        .unwrap();
+    assert_eq!(real.first_seq, 1);
+}
