@@ -193,6 +193,13 @@ The token lives only in server memory, expires after 1 hour, and is spent once t
 superuser is created. Restart the server for a fresh link. In Docker, read it with
 `docker logs <container>`.
 
+Headless alternative (safe while the server runs; uses the same `MONOLITH_DATA`):
+
+```bash
+monolith superuser create admin@example.com            # prompts for the password, no echo
+docker exec -it <container> monolith superuser create admin@example.com
+```
+
 On first start Monolith initializes `MONOLITH_DATA` (default `./monolith_data`) with:
 
 | Path | Purpose |

@@ -62,8 +62,9 @@ docker run -d --name monolith \
 
 First start prints a one-time setup URL for creating the first superuser
 (`/_/#/install/<token>`: 256-bit token, memory only, 1 h TTL, spent on use; implemented
-in Phase 1). Credentials never pass through env vars. `monolith superuser create` via
-`docker exec` is still planned.
+in Phase 1). Credentials never pass through env vars. Headless setup:
+`docker exec -it <c> monolith superuser create <email>` prompts for the password without
+echo, or reads one line from piped stdin; never from argv (implemented in Phase 1).
 
 ## 3. Config (`/data/monolith.toml`)
 

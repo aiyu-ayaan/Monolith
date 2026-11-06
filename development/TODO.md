@@ -55,7 +55,8 @@ Postgres prototype, PocketBase baseline, DuckDB A1–A3, Turso check, Docker ima
 ## In progress — Phase 1 (core data plane)
 
 Order of work: rules → contract → store tweaks → auth → core → server → admin UI (all landed).
-Next: Phase 1 follow-ups below, then the exit gates.
+Next: multi-relation junction tables + `?=` operators (largest Phase 1 data-model gap),
+then the other follow-ups below, then the exit gates.
 
 - [x] `crates/monolith-rules`: parser, type checker, SQL compiler (IS/IS NOT, LIKE ESCAPE,
       IN, EXISTS semi-joins for single relations up to 4 hops), in-memory predicate,
@@ -82,7 +83,9 @@ Next: Phase 1 follow-ups below, then the exit gates.
       record drawers, typed record form, install page, light/dark tokens, no external assets (27 KB gzip JS)
 - [ ] Manual check in a browser: `pnpm dev`, open the printed setup link
       (not run yet: starting servers on the host needs owner OK)
-- [ ] `monolith superuser create` CLI for headless setup (doc 18)
+- [x] `pnpm dev`: backend + admin UI together (`tools/dev.mjs`), root scripts restructured
+- [x] `monolith superuser create <email>` CLI for headless setup (doc 18): password via
+      no-echo prompt or piped stdin, never argv; safe next to a running server
 - [x] Phase 1 REST & debug follow-ups: single-relation `expand` (up to 4 hops, 1 batched query per relation per level),
       `total=none|exact|estimate`, `GET .../records:count`, `If-Match`/`ETag`/`If-None-Match` (`412`/`304`),
       `PUT` upsert, `?dry_run=true` savepoint rollback, `POST .../collections:diff`, `POST .../rules:explain`,

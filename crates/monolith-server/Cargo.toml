@@ -20,6 +20,7 @@ serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 rust-embed.workspace = true
+rpassword.workspace = true
 
 [dev-dependencies]
 tower = { workspace = true, features = ["util"] }
