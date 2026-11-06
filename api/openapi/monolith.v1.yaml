@@ -1,0 +1,489 @@
+openapi: 3.1.0
+info:
+  title: Monolith API
+  version: 1.0.0-draft
+  description: |
+    Static part of the Monolith REST contract (development/docs/11-api-and-openapi.md).
+    Covers Phase 1: superuser auth, apps, collections and records. Per-app typed
+    record schemas are served at runtime from /api/v1/apps/{app}/openapi.json (Phase 4).
+
+    Conventions:
+    - Ids are UUIDv7 as 26-char lowercase Crockford base32.
+    - Dates are RFC 3339 UTC strings with microsecond precision on the wire.
+    - Errors are RFC 9457 application/problem+json (api/jsonschema/error.json).
+    - Every response carries X-Request-Id (a valid client value is echoed).
+servers:
+  - url: http://localhost:8090
+security:
+  - bearerAuth: []
+
+paths:
+  /api/v1/system/health:
+    get:
+      operationId: health
+      security: []
+      responses:
+        "200":
+          description: Server is up
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: ok }
+
+  /api/v1/system/auth/login:
+    post:
+      operationId: superuserLogin
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Signed superuser token
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [token, expires]
+                properties:
+                  token: { type: string }
+                  expires: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/system/superusers:
+    post:
+      operationId: createSuperuser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 10 }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, email]
+                properties:
+                  id: { $ref: "#/components/schemas/Id" }
+                  email: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/system/apps:
+    get:
+      operationId: listApps
+      responses:
+        "200":
+          description: All apps
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/App" }
+        "401": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createApp
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { $ref: "#/components/schemas/Name" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/system/apps/{app}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: getApp
+      responses:
+        "200":
+          description: The app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteApp
+      description: Closes the app and deletes its data directory. Irreversible.
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/collections:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: listCollections
+      responses:
+        "200":
+          description: Collection definitions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Collection" }
+    post:
+      operationId: createCollection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CollectionInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Collection" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/collections/{collection}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - $ref: "#/components/parameters/Collection"
+    get:
+      operationId: getCollection
+      responses:
+        "200":
+          description: The collection
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Collection" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: replaceCollection
+      description: |
+        Replaces the definition; the server plans and applies the migration
+        (add/drop fields, indexes, rules). Field type changes are rejected until the
+        online table rebuild lands.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CollectionInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Collection" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteCollection
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/collections/{collection}/records:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - $ref: "#/components/parameters/Collection"
+    get:
+      operationId: listRecords
+      security: [{}, { bearerAuth: [] }]
+      parameters:
+        - name: filter
+          in: query
+          schema: { type: string, maxLength: 4096 }
+          description: Rules language, e.g. `status = 'open' && created > '2026-01-01'`
+        - name: sort
+          in: query
+          schema: { type: string }
+          description: Comma-separated fields, `-` prefix for descending. `id` is always the final tie-breaker.
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 50 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+          description: Opaque `next` value from the previous page. Must be used with the same filter and sort.
+        - name: fields
+          in: query
+          schema: { type: string }
+          description: Comma-separated top-level fields to return. `id` is always returned.
+      responses:
+        "200":
+          description: One page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Record" }
+                  next:
+                    type: [string, "null"]
+                    description: Cursor for the next page; null on the last page
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createRecord
+      security: [{}, { bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/collections/{collection}/records/{id}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - $ref: "#/components/parameters/Collection"
+      - name: id
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/Id" }
+    get:
+      operationId: getRecord
+      security: [{}, { bearerAuth: [] }]
+      responses:
+        "200":
+          description: The record
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "404":
+          description: Missing, or hidden by the view rule (same response, so existence does not leak)
+          content:
+            application/problem+json:
+              schema: { $ref: "../jsonschema/error.json" }
+    patch:
+      operationId: updateRecord
+      security: [{}, { bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteRecord
+      security: [{}, { bearerAuth: [] }]
+      responses:
+        "204": { description: Deleted }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/batch:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: batch
+      security: [{}, { bearerAuth: [] }]
+      description: All operations commit atomically or none do. At most 500 operations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ops]
+              properties:
+                ops:
+                  type: array
+                  maxItems: 500
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [op, collection]
+                    properties:
+                      op: { type: string, enum: [create, update, delete] }
+                      collection: { $ref: "#/components/schemas/Name" }
+                      id: { $ref: "#/components/schemas/Id" }
+                      body: { $ref: "#/components/schemas/RecordInput" }
+      responses:
+        "200":
+          description: Committed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [results]
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required: [id]
+                      properties:
+                        id: { $ref: "#/components/schemas/Id" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Superuser token from /api/v1/system/auth/login. User tokens and API keys arrive in Phase 2.
+
+  parameters:
+    App:
+      name: app
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Name" }
+    Collection:
+      name: collection
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Name" }
+
+  responses:
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: "../jsonschema/error.json" }
+
+  schemas:
+    Id:
+      type: string
+      pattern: "^[0-7][0-9abcdefghjkmnpqrstvwxyz]{25}$"
+    Name:
+      type: string
+      pattern: "^[a-z][a-z0-9_]{0,62}$"
+      description: Lowercase identifier. Names starting with `_` are reserved.
+
+    App:
+      type: object
+      required: [name, created]
+      properties:
+        name: { $ref: "#/components/schemas/Name" }
+        created: { type: string, format: date-time }
+
+    Field:
+      type: object
+      required: [name, type]
+      properties:
+        name:
+          allOf: [{ $ref: "#/components/schemas/Name" }]
+          not: { enum: [id, created, updated] }
+        type: { type: string, enum: [text, email, url, number, bool, date, select, relation, json] }
+        required: { type: boolean, default: false }
+        hidden: { type: boolean, default: false, description: Superuser-only; never returned to other callers }
+        min: { type: number, description: "text: min length; number: min value" }
+        max: { type: number, description: "text: max length (default 65536); number: max value" }
+        onlyInt: { type: boolean, default: false, description: number fields only }
+        values:
+          type: array
+          items: { type: string }
+          description: select fields only; allowed values
+        collection: { $ref: "#/components/schemas/Name", description: relation fields only; target collection }
+        onDelete: { type: string, enum: [restrict, cascade, setNull], default: restrict, description: relation fields only }
+
+    Rules:
+      type: object
+      description: Each rule is null (superusers only), "" (anyone) or an expression.
+      properties:
+        list: { type: [string, "null"], default: null }
+        view: { type: [string, "null"], default: null }
+        create: { type: [string, "null"], default: null }
+        update: { type: [string, "null"], default: null }
+        delete: { type: [string, "null"], default: null }
+
+    Index:
+      type: object
+      required: [fields]
+      properties:
+        fields:
+          type: array
+          minItems: 1
+          items: { type: string }
+        unique: { type: boolean, default: false }
+
+    CollectionInput:
+      type: object
+      required: [name, fields]
+      properties:
+        name: { $ref: "#/components/schemas/Name" }
+        type: { type: string, enum: [base], default: base }
+        fields:
+          type: array
+          maxItems: 61
+          items: { $ref: "#/components/schemas/Field" }
+        rules: { $ref: "#/components/schemas/Rules" }
+        indexes:
+          type: array
+          items: { $ref: "#/components/schemas/Index" }
+
+    Collection:
+      allOf:
+        - $ref: "#/components/schemas/CollectionInput"
+        - type: object
+          required: [version]
+          properties:
+            version: { type: integer, description: Increments on every schema change }
+
+    Record:
+      type: object
+      required: [id, created, updated, _v]
+      additionalProperties: true
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        created: { type: string, format: date-time }
+        updated: { type: string, format: date-time }
+        _v: { type: integer, description: seq of the last change to this record }
+
+    RecordInput:
+      type: object
+      additionalProperties: true
+      description: Field values. `id` may be set on create (client-generated UUIDv7); system fields are otherwise read-only.

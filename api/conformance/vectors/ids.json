@@ -1,0 +1,14 @@
+{
+  "description": "UUIDv7 bytes (hex) and their 26-char lowercase Crockford base32 wire form. decode(wire) must equal bytes; invalid inputs must be rejected.",
+  "valid": [
+    { "hex": "00000000000000000000000000000000", "wire": "00000000000000000000000000" },
+    { "hex": "ffffffffffffffffffffffffffffffff", "wire": "7zzzzzzzzzzzzzzzzzzzzzzzzz" },
+    { "hex": "0192d4a0b3c07def8123456789abcdef", "wire": "01jbaa1cy0fqqr28t5cy4tqkff" }
+  ],
+  "invalid": [
+    "8zzzzzzzzzzzzzzzzzzzzzzzzz",
+    "01JBAA1CY0FQQR28T5CY4TQKFF",
+    "01jbaa1cy0fqqr28t5cy4tqkf",
+    "01jbaa1cy0fqqr28t5cy4tqkfu"
+  ]
+}

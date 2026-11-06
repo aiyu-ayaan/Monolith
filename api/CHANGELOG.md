@@ -1,3 +1,7 @@
 # API changelog
 ## v1 (draft)
 - Initial contract, see development/docs/11-api-and-openapi.md and 07-realtime.md.
+- Phase 1: OpenAPI for health, superuser login, superusers, apps, collections,
+  records (list/create/view/update/delete, keyset cursor) and transactional batch.
+- RFC 9457 problem schema with stable `type` codes and per-field `errors[]`.
+- Conformance vectors: `ids.json` (wire id encoding), `filters.json` (filter validity).

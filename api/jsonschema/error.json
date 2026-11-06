@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://monolith.dev/schemas/v1/error.json",
+  "title": "Problem",
+  "description": "RFC 9457 problem details. Content-Type: application/problem+json.",
+  "type": "object",
+  "required": ["type", "title", "status", "requestId"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "description": "Stable error code URI, e.g. https://monolith.dev/errors/validation",
+      "enum": [
+        "https://monolith.dev/errors/bad-request",
+        "https://monolith.dev/errors/validation",
+        "https://monolith.dev/errors/unauthorized",
+        "https://monolith.dev/errors/forbidden",
+        "https://monolith.dev/errors/not-found",
+        "https://monolith.dev/errors/conflict",
+        "https://monolith.dev/errors/payload-too-large",
+        "https://monolith.dev/errors/busy",
+        "https://monolith.dev/errors/internal"
+      ]
+    },
+    "title": { "type": "string" },
+    "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+    "detail": { "type": "string" },
+    "requestId": { "type": "string", "description": "Same value as the X-Request-Id response header" },
+    "errors": {
+      "type": "array",
+      "description": "Per-field problems for validation errors",
+      "items": {
+        "type": "object",
+        "required": ["field", "code", "message"],
+        "properties": {
+          "field": { "type": "string" },
+          "code": {
+            "type": "string",
+            "enum": ["required", "type", "too_long", "too_short", "out_of_range", "invalid_format", "invalid_option", "unknown_field", "read_only"]
+          },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  }
+}
