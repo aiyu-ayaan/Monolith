@@ -85,6 +85,7 @@ export interface Field {
   values?: string[];
   collection?: string;
   onDelete?: "restrict" | "cascade" | "setNull";
+  maxSelect?: number;
 }
 
 export type RuleKey = "list" | "view" | "create" | "update" | "delete";

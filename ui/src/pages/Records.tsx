@@ -11,7 +11,9 @@ interface Page {
   next: string | null;
 }
 
-const cell = (v: unknown) => (v === null || v === undefined ? "" : typeof v === "object" ? JSON.stringify(v) : String(v));
+const isMultiRel = (f: Field) => f.type === "relation" && (f.maxSelect ?? 1) > 1;
+const cell = (v: unknown) =>
+  v === null || v === undefined ? "" : Array.isArray(v) ? v.join(", ") : typeof v === "object" ? JSON.stringify(v) : String(v);
 
 export default function Records() {
   const params = useParams();
@@ -127,7 +129,10 @@ export default function Records() {
                 {(f) => (
                   <th scope="col">
                     {f.name}
-                    <span class="type-tag">{f.type}</span>
+                    <span class="type-tag">
+                      {f.type}
+                      {isMultiRel(f) ? "[]" : ""}
+                    </span>
                   </th>
                 )}
               </For>
@@ -207,14 +212,16 @@ type FormVal = string | boolean;
 function toForm(f: Field, v: unknown): FormVal {
   if (f.type === "bool") return !!v;
   if (v === null || v === undefined) return "";
+  if (isMultiRel(f) && Array.isArray(v)) return v.join(", ");
   if (f.type === "json") return JSON.stringify(v, null, 2);
   return String(v);
 }
 
-/** Form value → wire value; empty means null. Throws on invalid JSON. */
+/** Form value → wire value; empty means null (or [] for multi-relations). Throws on invalid JSON. */
 function fromForm(f: Field, v: FormVal): unknown {
   if (f.type === "bool") return v === true;
   const s = String(v);
+  if (isMultiRel(f)) return s.split(/[\s,]+/).filter(Boolean);
   if (s.trim() === "") return null;
   if (f.type === "number") return Number(s);
   if (f.type === "json") return JSON.parse(s);
@@ -330,7 +337,10 @@ function RecordForm(p: {
                         *
                       </span>
                     </Show>
-                    <span class="type-tag">{f.type}</span>
+                    <span class="type-tag">
+                      {f.type}
+                      {isMultiRel(f) ? ` (max ${f.maxSelect})` : ""}
+                    </span>
                   </label>
                   <Show
                     when={f.type === "select"}
@@ -344,7 +354,15 @@ function RecordForm(p: {
                             type={INPUT_TYPE[f.type] ?? "text"}
                             step={f.type === "number" && !f.onlyInt ? "any" : undefined}
                             required={f.required}
-                            placeholder={f.type === "date" ? "2026-01-01T00:00:00Z" : f.type === "relation" ? `${f.collection} id` : undefined}
+                            placeholder={
+                              f.type === "date"
+                                ? "2026-01-01T00:00:00Z"
+                                : isMultiRel(f)
+                                  ? `${f.collection} ids, comma separated`
+                                  : f.type === "relation"
+                                    ? `${f.collection} id`
+                                    : undefined
+                            }
                             aria-invalid={!!err()}
                             aria-describedby={err() ? `${id}-err` : undefined}
                             value={vals[f.name] as string}

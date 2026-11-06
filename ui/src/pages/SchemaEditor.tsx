@@ -38,6 +38,7 @@ function cleanField(f: Field): Field {
   if (f.type === "relation") {
     out.collection = f.collection;
     if (f.onDelete && f.onDelete !== "restrict") out.onDelete = f.onDelete;
+    if (f.maxSelect !== undefined && !Number.isNaN(f.maxSelect) && f.maxSelect > 1) out.maxSelect = Math.trunc(f.maxSelect);
   }
   return out;
 }
@@ -229,10 +230,20 @@ export default function SchemaEditor(p: {
                       </option>
                       <For each={p.collections}>{(c) => <option value={c.name}>{c.name}</option>}</For>
                     </select>
+                    <input
+                      class="small"
+                      aria-label="Max select"
+                      placeholder="maxSelect (1)"
+                      inputmode="numeric"
+                      value={f.maxSelect ?? ""}
+                      onInput={(e) => setField(i(), { maxSelect: num(e.currentTarget.value) })}
+                    />
                     <select aria-label="On delete" value={f.onDelete ?? "restrict"} onChange={(e) => setField(i(), { onDelete: e.currentTarget.value as Field["onDelete"] })}>
                       <option value="restrict">on delete: restrict</option>
                       <option value="cascade">on delete: cascade</option>
-                      <option value="setNull">on delete: set null</option>
+                      <option value="setNull" disabled={(f.maxSelect ?? 1) > 1}>
+                        on delete: set null
+                      </option>
                     </select>
                   </Show>
                 </div>
