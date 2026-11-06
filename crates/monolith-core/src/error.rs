@@ -32,6 +32,8 @@ pub enum CoreError {
     NotFound(&'static str),
     #[error("{0}")]
     Conflict(String),
+    #[error("{0}")]
+    TooLarge(String),
     #[error("server busy, retry later")]
     Busy,
     #[error("internal error: {0}")]

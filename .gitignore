@@ -22,3 +22,5 @@ bench/results/*.raw
 .idea/
 .vscode/
 .codegraph/
+# Local server data
+monolith_data/

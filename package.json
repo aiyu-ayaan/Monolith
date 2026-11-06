@@ -22,6 +22,8 @@
     "rust:bench": "cargo bench --workspace",
     "rust:bench:build": "cargo bench --workspace --no-run",
     "rust:deny": "cargo deny check",
-    "bench:engine": "cargo run --release -p monolith-bench --"
+    "bench:engine": "cargo run --release -p monolith-bench --",
+    "server:dev": "cargo run -p monolith-server",
+    "server:release": "cargo run --release -p monolith-server"
   }
 }

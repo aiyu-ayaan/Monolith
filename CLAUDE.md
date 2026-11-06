@@ -4,8 +4,9 @@ Monolith is a self-hosted, single-container backend suite in Rust: database with
 access rules, auth, realtime, offline sync, files, analytics, and backups. One server
 serves many apps. Inspired by PocketBase and Firebase.
 
-**Current phase: analysis / design. No code yet.** The design docs in
-`development/docs/` are the source of truth. Read `development/docs/README.md` first.
+**Current phase: Phase 1 (core data plane) in progress; Phase 0 bake-off runs pending.**
+The design docs in `development/docs/` are the source of truth. Read
+`development/docs/README.md` first, then `development/TODO.md` for where work stands.
 
 ## Prime directive: performance first
 
@@ -110,6 +111,8 @@ pnpm rust:fmt                         # format
 pnpm rust:bench:build                 # compile benches only
 pnpm rust:bench                       # run benches (ask the owner before running on the host)
 pnpm rust:deny                        # cargo-deny (needs `cargo install cargo-deny`)
+pnpm server:dev                       # run the server (env: MONOLITH_DATA, MONOLITH_ADDR,
+                                      # MONOLITH_ADMIN_EMAIL/PASSWORD for the first superuser)
 ```
 
 ## Reference material
