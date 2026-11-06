@@ -16,6 +16,7 @@
         "https://monolith.dev/errors/forbidden",
         "https://monolith.dev/errors/not-found",
         "https://monolith.dev/errors/conflict",
+        "https://monolith.dev/errors/precondition-failed",
         "https://monolith.dev/errors/payload-too-large",
         "https://monolith.dev/errors/busy",
         "https://monolith.dev/errors/internal"

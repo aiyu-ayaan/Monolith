@@ -241,6 +241,14 @@ paths:
           in: query
           schema: { type: string }
           description: Comma-separated top-level fields to return. `id` is always returned.
+        - name: expand
+          in: query
+          schema: { type: string }
+          description: Comma-separated relation paths (up to 4 hops, e.g. `author,parent.author`).
+        - name: total
+          in: query
+          schema: { type: string, enum: [none, exact, estimate], default: none }
+          description: Opt-in count (`none` omits `total`, `exact` runs `COUNT(*)`, `estimate` uses table stats when unfiltered).
       responses:
         "200":
           description: One page
@@ -256,11 +264,19 @@ paths:
                   next:
                     type: [string, "null"]
                     description: Cursor for the next page; null on the last page
+                  total:
+                    type: [integer, "null"]
+                    description: Present when `total=exact` or `total=estimate`
         "400": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
     post:
       operationId: createRecord
       security: [{}, { bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DryRun"
+        - name: expand
+          in: query
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -269,6 +285,10 @@ paths:
       responses:
         "201":
           description: Created
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Quoted record version `_v`
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Record" }
@@ -276,6 +296,34 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/collections/{collection}/records:count:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - $ref: "#/components/parameters/Collection"
+    get:
+      operationId: countRecords
+      security: [{}, { bearerAuth: [] }]
+      parameters:
+        - name: filter
+          in: query
+          schema: { type: string, maxLength: 4096 }
+        - name: total
+          in: query
+          schema: { type: string, enum: [exact, estimate], default: exact }
+      responses:
+        "200":
+          description: Record count
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [total, exact]
+                properties:
+                  total: { type: integer }
+                  exact: { type: boolean }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
 
   /api/v1/apps/{app}/collections/{collection}/records/{id}:
     parameters:
@@ -288,12 +336,29 @@ paths:
     get:
       operationId: getRecord
       security: [{}, { bearerAuth: [] }]
+      parameters:
+        - name: expand
+          in: query
+          schema: { type: string }
+        - name: fields
+          in: query
+          schema: { type: string }
+        - name: If-None-Match
+          in: header
+          schema: { type: string }
+          description: Record version `_v` (quoted or unquoted); returns 304 when unchanged
       responses:
         "200":
           description: The record
+          headers:
+            ETag:
+              schema: { type: string }
+              description: Quoted record version `_v`
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Record" }
+        "304":
+          description: Not modified
         "404":
           description: Missing, or hidden by the view rule (same response, so existence does not leak)
           content:
@@ -302,6 +367,15 @@ paths:
     patch:
       operationId: updateRecord
       security: [{}, { bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DryRun"
+        - name: expand
+          in: query
+          schema: { type: string }
+        - name: If-Match
+          in: header
+          schema: { type: string }
+          description: Expected `_v` for optimistic concurrency; mismatches return 412
       requestBody:
         required: true
         content:
@@ -310,17 +384,67 @@ paths:
       responses:
         "200":
           description: Updated
+          headers:
+            ETag:
+              schema: { type: string }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Record" }
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "412": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: upsertRecord
+      security: [{}, { bearerAuth: [] }]
+      description: Updates the record if it exists (checked by update rule, 200), otherwise creates it with this id (checked by create rule, 201).
+      parameters:
+        - $ref: "#/components/parameters/DryRun"
+        - name: expand
+          in: query
+          schema: { type: string }
+        - name: If-Match
+          in: header
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordInput" }
+      responses:
+        "200":
+          description: Updated existing record
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "201":
+          description: Created new record
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Record" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "412": { $ref: "#/components/responses/Problem" }
     delete:
       operationId: deleteRecord
       security: [{}, { bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/DryRun"
+        - name: If-Match
+          in: header
+          schema: { type: string }
+          description: Expected `_v` for optimistic concurrency; mismatches return 412
       responses:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Problem" }
+        "412": { $ref: "#/components/responses/Problem" }
 
   /api/v1/apps/{app}/batch:
     parameters:
@@ -329,6 +453,8 @@ paths:
       operationId: batch
       security: [{}, { bearerAuth: [] }]
       description: All operations commit atomically or none do. At most 500 operations.
+      parameters:
+        - $ref: "#/components/parameters/DryRun"
       requestBody:
         required: true
         content:
@@ -368,6 +494,165 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/collections:diff:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: diffCollection
+      description: Plans DDL statements for creating or replacing a collection without applying them.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CollectionInput" }
+      responses:
+        "200":
+          description: Planned migration statements
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [statements]
+                properties:
+                  statements:
+                    type: array
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/rules:explain:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: explainRule
+      description: Compiles a collection rule or filter expression and optionally evaluates it against a sample row and principal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [collection]
+              properties:
+                collection: { $ref: "#/components/schemas/Name" }
+                op: { type: string, enum: [list, view, create, update, delete, filter], default: list }
+                expr: { type: string, description: Override rule/filter expression; defaults to the collection rule for `op` }
+                authAs:
+                  type: object
+                  properties:
+                    id: { $ref: "#/components/schemas/Id" }
+                    collection: { type: string, default: users }
+                    claims: { type: object, additionalProperties: true }
+                record: { type: object, additionalProperties: true, description: Sample record values for in-memory evaluation }
+                body: { type: object, additionalProperties: true, description: "@request.body values for write rules" }
+      responses:
+        "200":
+          description: Rule explanation
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [collection, op, expr, class, sql]
+                properties:
+                  collection: { type: string }
+                  op: { type: string }
+                  expr: { type: [string, "null"] }
+                  class: { type: string, enum: [superusersOnly, const, authOnly, rowLocal, relational] }
+                  sql: { type: string }
+                  verdict: { type: [boolean, "null"] }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/query:explain:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: explainQuery
+      description: Compiles a list query and returns its SQLite EXPLAIN QUERY PLAN and index suggestions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [collection]
+              properties:
+                collection: { $ref: "#/components/schemas/Name" }
+                filter: { type: string, default: "" }
+                sort: { type: string, default: "" }
+                superuser: { type: boolean, default: false }
+      responses:
+        "200":
+          description: Query plan and index suggestions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sql, plan, usesScan, suggestedIndexes]
+                properties:
+                  sql: { type: string }
+                  plan:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, parent, detail]
+                      properties:
+                        id: { type: integer }
+                        parent: { type: integer }
+                        detail: { type: string }
+                  usesScan: { type: boolean }
+                  suggestedIndexes:
+                    type: array
+                    items: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/logs:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: listLogs
+      parameters:
+        - name: request_id
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+      responses:
+        "200":
+          description: Recent request traces
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/RequestLog" }
+
+  /api/v1/apps/{app}/logs/slow:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: listSlowQueries
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+      responses:
+        "200":
+          description: Slowest recent requests by duration
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/RequestLog" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -386,6 +671,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/Name" }
+    DryRun:
+      name: dry_run
+      in: query
+      schema: { type: boolean, default: false }
+      description: Validate and run inside a rolled-back savepoint without committing changes.
 
   responses:
     Problem:
@@ -482,8 +772,24 @@ components:
         created: { type: string, format: date-time }
         updated: { type: string, format: date-time }
         _v: { type: integer, description: seq of the last change to this record }
+        expand:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/Record" }
 
     RecordInput:
       type: object
       additionalProperties: true
       description: Field values. `id` may be set on create (client-generated UUIDv7); system fields are otherwise read-only.
+
+    RequestLog:
+      type: object
+      required: [requestId, timestamp, method, path, status, durationUs, superuser]
+      properties:
+        requestId: { type: string }
+        timestamp: { type: string, format: date-time }
+        method: { type: string }
+        path: { type: string }
+        status: { type: integer }
+        durationUs: { type: integer }
+        superuser: { type: boolean }
+        error: { type: [string, "null"] }
