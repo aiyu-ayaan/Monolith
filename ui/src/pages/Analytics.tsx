@@ -1,6 +1,6 @@
 import { createMemo, createResource, createSignal, For, onCleanup, Show, type JSX } from "solid-js";
 import { useParams } from "@solidjs/router";
-import { api, enc, type ApiError, type AppStats, type RequestLog, type SystemStats, type Traffic, type TrafficPoint, type TrafficSeries } from "../api";
+import { api, enc, ready, type ApiError, type AppStats, type RequestLog, type SystemStats, type Traffic, type TrafficPoint, type TrafficSeries } from "../api";
 import { fmtBytes, fmtClock, fmtHour, fmtNum, fmtUptime, fmtUs, LineChart } from "../charts";
 import { fmtDate, Icon } from "../ui";
 import ErrorBox from "./ErrorBox";
@@ -157,7 +157,7 @@ export function SystemAnalytics() {
   const [stats, { refetch }] = createResource(() => api<SystemStats>("GET", "/api/v1/system/stats"));
   const [range, setRange] = createSignal<Range>("1h");
   const [live, setLive] = usePoll(refetch);
-  const s = () => stats.latest;
+  const s = () => ready(stats);
 
   return (
     <div class="page wide">
@@ -305,8 +305,8 @@ export function AppAnalytics() {
     refetchLogs();
   };
   const [live, setLive] = usePoll(refreshAll);
-  const s = () => stats.latest;
-  const errors = () => (logs.latest?.items ?? []).filter((l) => l.status >= 400).slice(0, 10);
+  const s = () => ready(stats);
+  const errors = () => (ready(logs)?.items ?? []).filter((l) => l.status >= 400).slice(0, 10);
 
   // COUNT(*) per collection: on demand only, never on the 5 s poll.
   const countExact = async () => {
@@ -425,7 +425,7 @@ export function AppAnalytics() {
               <section class="card">
                 <h2 class="card-title">Slowest requests</h2>
                 <p class="muted small">From the last 2048 requests to this app.</p>
-                <LogTable items={slow.latest?.items} empty="No requests yet." />
+                <LogTable items={ready(slow)?.items} empty="No requests yet." />
               </section>
               <section class="card">
                 <h2 class="card-title">Recent errors</h2>

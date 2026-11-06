@@ -1,6 +1,6 @@
 import { createContext, createResource, createSignal, For, Show, useContext, type Resource } from "solid-js";
 import { useLocation, useNavigate, useParams, type RouteSectionProps } from "@solidjs/router";
-import { api, enc, type ApiError, type Collection } from "../api";
+import { api, enc, ready, type ApiError, type Collection } from "../api";
 import { Icon, toast } from "../ui";
 import ErrorBox from "./ErrorBox";
 import SchemaEditor from "./SchemaEditor";
@@ -25,7 +25,7 @@ export default function AppLayout(props: RouteSectionProps) {
   );
   const [q, setQ] = createSignal("");
   const [editing, setEditing] = createSignal<{ c: Collection | null } | null>(null);
-  const shown = () => (cols()?.items ?? []).filter((c) => c.name.includes(q().trim().toLowerCase()));
+  const shown = () => (ready(cols)?.items ?? []).filter((c) => c.name.includes(q().trim().toLowerCase()));
   const appPath = () => `/apps/${enc(params.app!)}`;
   const onAnalytics = () => loc.pathname.endsWith("/analytics");
 
@@ -85,7 +85,7 @@ export default function AppLayout(props: RouteSectionProps) {
           <SchemaEditor
             app={params.app!}
             initial={e().c}
-            collections={cols()?.items ?? []}
+            collections={ready(cols)?.items ?? []}
             onClose={() => setEditing(null)}
             onSaved={async (c) => {
               await refetch();
@@ -108,7 +108,7 @@ export default function AppLayout(props: RouteSectionProps) {
 
 export function AppHome() {
   const ctx = useApp();
-  const none = () => !ctx.collections.loading && !ctx.collections()?.items.length;
+  const none = () => !ctx.collections.loading && !ctx.collections.error && !ready(ctx.collections)?.items.length;
   return (
     <div class="empty full">
       <Icon name="folder" size={32} />

@@ -1,7 +1,7 @@
 import { createEffect, createResource, createSignal, For, on, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import { useParams } from "@solidjs/router";
-import { api, enc, type ApiError, type Collection, type Field, type RecordRow } from "../api";
+import { api, enc, ready, type ApiError, type Collection, type Field, type RecordRow } from "../api";
 import { Drawer, fmtDate, Icon, toast } from "../ui";
 import { useApp } from "./AppLayout";
 import ErrorBox from "./ErrorBox";
@@ -18,7 +18,7 @@ const cell = (v: unknown) =>
 export default function Records() {
   const params = useParams();
   const ctx = useApp();
-  const coll = () => ctx.collections()?.items.find((c) => c.name === params.coll);
+  const coll = () => ready(ctx.collections)?.items.find((c) => c.name === params.coll);
   const collPath = () => `/api/v1/apps/${enc(params.app!)}/collections/${enc(params.coll!)}`;
 
   const [filter, setFilter] = createSignal("");
@@ -61,7 +61,7 @@ export default function Records() {
   };
 
   const next = () => {
-    const c = page()?.next;
+    const c = ready(page)?.next;
     if (!c) return;
     setCursors([...cursors(), c]);
     setQuery({ ...query(), cursor: c });
@@ -141,7 +141,7 @@ export default function Records() {
           </thead>
           <tbody>
             <For
-              each={page()?.items}
+              each={ready(page)?.items}
               fallback={
                 <tr>
                   <td colspan={fields().length + 2} class="empty-row">
@@ -182,7 +182,7 @@ export default function Records() {
           <Icon name="chevronLeft" />
           Previous
         </button>
-        <button class="btn ghost" disabled={!page()?.next} onClick={next}>
+        <button class="btn ghost" disabled={!ready(page)?.next} onClick={next}>
           Next
           <Icon name="chevronRight" />
         </button>

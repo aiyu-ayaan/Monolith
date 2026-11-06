@@ -52,21 +52,43 @@ export async function api<T>(method: string, path: string, body?: unknown): Prom
   const t = token();
   if (t) headers.authorization = `Bearer ${t}`;
   if (body !== undefined) headers["content-type"] = "application/json";
-  let res: Response;
-  try {
-    res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-  } catch (e) {
-    throw new ApiError({ type: "network", title: "Network error", status: 0, detail: String(e) });
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    } catch (e) {
+      if (method === "GET" && attempt < 6) {
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      throw new ApiError({ type: "network", title: "Network error", status: 0, detail: String(e) });
+    }
+    if (res.status === 204) return undefined as T;
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      // Vite's dev proxy returns 500/502 with a plain-text body while cargo is still compiling the server.
+      if (method === "GET" && data === null && res.status >= 500 && attempt < 6) {
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      if (res.status === 401 && t) setToken(null);
+      throw new ApiError(
+        data ?? {
+          type: "http",
+          title: res.statusText || `HTTP ${res.status}`,
+          status: res.status,
+          detail: data === null && res.status >= 500 ? "Backend server is not reachable (is `pnpm dev` running?)" : undefined,
+          requestId: res.headers.get("x-request-id") ?? undefined,
+        },
+      );
+    }
+    return data as T;
   }
-  if (res.status === 204) return undefined as T;
-  const data = await res.json().catch(() => null);
-  if (!res.ok) {
-    if (res.status === 401 && t) setToken(null);
-    throw new ApiError(
-      data ?? { type: "http", title: res.statusText, status: res.status, requestId: res.headers.get("x-request-id") ?? undefined },
-    );
-  }
-  return data as T;
+}
+
+/** Reads a Solid resource without throwing when `r.error` is set. */
+export function ready<T>(r: { error: unknown; latest?: T }): T | undefined {
+  return r.error ? undefined : r.latest;
 }
 
 export const enc = encodeURIComponent;

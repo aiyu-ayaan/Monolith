@@ -1,5 +1,5 @@
 import { createResource, createSignal, For, Show } from "solid-js";
-import { api, enc, type ApiError, type AppInfo } from "../api";
+import { api, enc, ready, type ApiError, type AppInfo } from "../api";
 import { fmtDate, Icon, toast } from "../ui";
 import ErrorBox from "./ErrorBox";
 
@@ -75,9 +75,16 @@ export default function Apps() {
 
       <ErrorBox error={error() ?? (apps.error as ApiError | undefined)} />
 
-      <Show when={apps()} fallback={<div class="skeleton" aria-busy="true" aria-label="Loading apps" />}>
+      <Show
+        when={ready(apps)}
+        fallback={
+          <Show when={!apps.error}>
+            <div class="skeleton" aria-busy="true" aria-label="Loading apps" />
+          </Show>
+        }
+      >
         <Show
-          when={apps()!.items.length}
+          when={ready(apps)!.items.length}
           fallback={
             <div class="empty">
               <Icon name="database" size={32} />
@@ -87,7 +94,7 @@ export default function Apps() {
           }
         >
           <ul class="app-grid">
-            <For each={apps()!.items}>
+            <For each={ready(apps)!.items}>
               {(a) => (
                 <li class="app-card">
                   <a class="app-link" href={`#/apps/${enc(a.name)}`}>
