@@ -39,7 +39,8 @@ Source of truth for design: `docs/README.md`. Phases: `docs/20-roadmap.md`.
 - [ ] Extend harness: S2, S4–S8, realtime/sync scenarios
 - [ ] PocketBase baseline P1–P7 in Docker (ask before running on host) — validates B1–B10
 - [x] `AppStore` trait + SQLite prototype: writer thread, group commit, reader pool (`crates/monolith-store`)
-- [ ] SQLite prototype follow-ups: writer restart on panic, bounded reader wait (`read_timeout`), idle WAL checkpoint task, `LIBSQLITE3_FLAGS` compile flags
+- [x] SQLite prototype follow-ups: writer panic recovery, bounded reader wait (`read_timeout`), idle WAL checkpoint task (`crates/monolith-store`)
+- [ ] SQLite compile flags (`LIBSQLITE3_FLAGS`)
 - [ ] Postgres co-located prototype over Unix socket
 - [ ] Verify Turso MVCC maturity (Q-engine); include only if usable
 - [x] Micro-benchmark code: UUIDv7 encode/decode, group commit on/off, `WITHOUT ROWID` vs rowid, point read (`benches/store.rs`, not yet run)
@@ -77,12 +78,14 @@ Next: Phase 1 follow-ups below, then the exit gates.
 - [x] `agent-skills/monolith-rest` + `monolith-rules`: "implemented today" sections
 - [ ] Manual check in a browser: `pnpm build:ui && MONOLITH_ADMIN_EMAIL=… MONOLITH_ADMIN_PASSWORD=… pnpm server:dev`,
       open http://localhost:8090/_/ (not run yet: starting servers on the host needs owner OK)
-- [ ] Phase 1 follow-ups: multi-relation junction tables + `?=` operators, `@collection` joins,
-      back-relations (`_via_`), `:isset`/`:changed`, expand, `fields` projection in SQL (now done at
-      encode), `total=exact|estimate`, superuser TOTP, `rules:explain`/`query:explain`, `dry_run`,
-      request trace store (`/logs?request_id=`), `If-Match`/`PUT` upsert, docs/api/rest.md + rules.md,
-      precompressed UI assets (brotli/gzip), TanStack virtual grid + CodeMirror rule editor,
-      superuser token revocation, writer restart on panic, `json` fields as JSONB
+- [x] Phase 1 REST & debug follow-ups: single-relation `expand` (up to 4 hops, 1 batched query per relation per level),
+      `total=none|exact|estimate`, `GET .../records:count`, `If-Match`/`ETag`/`If-None-Match` (`412`/`304`),
+      `PUT` upsert, `?dry_run=true` savepoint rollback, `POST .../collections:diff`, `POST .../rules:explain`,
+      `POST .../query:explain`, request trace ring buffer (`GET .../logs?request_id=` & `GET .../logs/slow`)
+- [ ] Remaining Phase 1 follow-ups: multi-relation junction tables + `?=` operators, `@collection` joins,
+      back-relations (`_via_`), `:isset`/`:changed`, `fields` projection in SQL (now done at encode),
+      superuser TOTP + token revocation, docs/api/rest.md + rules.md, precompressed UI assets (brotli/gzip),
+      TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
 - [ ] Phase 1 exit: M1–M6 gates, ported PocketBase rules vectors
 
 ## Later phases (see `docs/20-roadmap.md`)

@@ -23,14 +23,19 @@ curl -H "Authorization: Bearer $MONOLITH_KEY" \
 
 Check this list before relying on a feature; the rest of this page is the target design.
 
-- Works: list (`filter`, `sort`, `limit`, `cursor`, `fields`), create, view, `PATCH` update, delete,
-  `POST /api/v1/apps/{app}/batch` with `{"ops":[{"op":"create|update|delete","collection":..,"id":..,"body":{..}}]}`.
+- Works: list (`filter`, `sort`, `limit`, `cursor`, `fields`, `expand`, `total=none|exact|estimate`),
+  `GET .../records:count`, create, view (`fields`, `expand`, `ETag`, `If-None-Match` → 304),
+  `PATCH` update (`If-Match` → 412), `PUT` upsert (201 when new, 200 when existing), delete (`If-Match`),
+  `?dry_run=true` on all write endpoints, and `POST /api/v1/apps/{app}/batch`.
+- Debug endpoints: `POST /api/v1/apps/{app}/collections:diff`, `POST /api/v1/apps/{app}/rules:explain`,
+  `POST /api/v1/apps/{app}/query:explain`, `GET /api/v1/apps/{app}/logs?request_id=...`,
+  `GET /api/v1/apps/{app}/logs/slow`.
 - Auth: only superuser tokens from `POST /api/v1/system/auth/login`. Without a token you are
   anonymous and the collection rules decide. A bad token is 401, never anonymous.
-- Not yet: user tokens, API keys, `expand`, `total`, `If-Match`, `PUT` upsert, `openapi.json`, 429 rate limits.
+- Not yet: user tokens, API keys, `openapi.json`, 429 rate limits.
 - Status codes: create rule rejects → 403; update/delete rule rejects or record missing → 404;
-  rule `null` → 403 for non-superusers; unique/FK violation → 409; body over 1 MiB → 413;
-  writer queue full → 503 + `Retry-After`.
+  rule `null` → 403 for non-superusers; unique/FK violation → 409; stale `If-Match` → 412;
+  body over 1 MiB → 413; writer queue full → 503 + `Retry-After`.
 - Every response has `X-Request-Id`; error bodies repeat it as `requestId`. Send your own
   (`[A-Za-z0-9._-]{1,64}`) to correlate logs.
 - Records: `id` (26-char base32 UUIDv7), `created`/`updated` (RFC 3339 µs UTC), `_v` (change seq).
