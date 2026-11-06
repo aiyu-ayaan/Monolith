@@ -21,7 +21,7 @@ export default function ErrorBox(props: { error: ApiError | null | undefined }) 
             </ul>
           </Show>
           <Show when={e().problem.requestId}>
-            <div class="muted">request id {e().problem.requestId}</div>
+            <div class="muted small mono">request id {e().problem.requestId}</div>
           </Show>
         </div>
       )}

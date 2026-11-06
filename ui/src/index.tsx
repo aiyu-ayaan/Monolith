@@ -2,38 +2,52 @@ import { render } from "solid-js/web";
 import { HashRouter, Navigate, Route, type RouteSectionProps } from "@solidjs/router";
 import { Show } from "solid-js";
 import { setToken, token } from "./api";
+import { Icon, Toasts } from "./ui";
 import Login from "./pages/Login";
+import Install from "./pages/Install";
 import Apps from "./pages/Apps";
-import Collections from "./pages/Collections";
+import AppLayout, { AppHome } from "./pages/AppLayout";
 import Records from "./pages/Records";
 import "./styles.css";
 
 function Shell(props: RouteSectionProps) {
   return (
     <Show when={token()} fallback={<Navigate href="/login" />}>
-      <header class="top">
-        <a href="#/" class="brand">
-          Monolith
-        </a>
-        <button class="ghost" onClick={() => setToken(null)}>
-          Sign out
-        </button>
-      </header>
-      <main>{props.children}</main>
+      <div class="shell">
+        <nav class="rail" aria-label="Main">
+          <a href="#/" class="logo" aria-label="Monolith home">
+            <Icon name="logo" size={22} />
+          </a>
+          <a href="#/" class="rail-btn active" aria-label="Apps" title="Apps">
+            <Icon name="layers" />
+          </a>
+          <span class="grow" />
+          <button class="rail-btn" aria-label="Sign out" title="Sign out" onClick={() => setToken(null)}>
+            <Icon name="logout" />
+          </button>
+        </nav>
+        <main class="shell-main">{props.children}</main>
+      </div>
     </Show>
   );
 }
 
 render(
   () => (
-    <HashRouter>
-      <Route path="/login" component={Login} />
-      <Route path="/" component={Shell}>
-        <Route path="/" component={Apps} />
-        <Route path="/apps/:app" component={Collections} />
-        <Route path="/apps/:app/c/:coll" component={Records} />
-      </Route>
-    </HashRouter>
+    <>
+      <HashRouter>
+        <Route path="/login" component={Login} />
+        <Route path="/install/:token" component={Install} />
+        <Route path="/" component={Shell}>
+          <Route path="/" component={Apps} />
+          <Route path="/apps/:app" component={AppLayout}>
+            <Route path="/" component={AppHome} />
+            <Route path="/c/:coll" component={Records} />
+          </Route>
+        </Route>
+      </HashRouter>
+      <Toasts />
+    </>
   ),
   document.getElementById("root")!,
 );
