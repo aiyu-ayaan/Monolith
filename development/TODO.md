@@ -90,6 +90,10 @@ then the other follow-ups below, then the exit gates.
       `total=none|exact|estimate`, `GET .../records:count`, `If-Match`/`ETag`/`If-None-Match` (`412`/`304`),
       `PUT` upsert, `?dry_run=true` savepoint rollback, `POST .../collections:diff`, `POST .../rules:explain`,
       `POST .../query:explain`, request trace ring buffer (`GET .../logs?request_id=` & `GET .../logs/slow`)
+- [x] Global and per-app traffic & store analytics (in-memory since start, per-minute 1h & per-hour 48h rings):
+      `SqliteStore::stats`, `GET /api/v1/system/stats`, `GET /api/v1/apps/{app}/stats?counts=estimate|exact`,
+      and Admin UI server + per-app analytics screens (`/#/analytics`, `/#/apps/{app}/analytics`) with SVG
+      time-series charts, storage engine internals, per-collection counters, slow requests and recent errors
 - [ ] Remaining Phase 1 follow-ups: multi-relation junction tables + `?=` operators, `@collection` joins,
       back-relations (`_via_`), `:isset`/`:changed`, `fields` projection in SQL (now done at encode),
       superuser TOTP + token revocation, docs/api/rest.md + rules.md, precompressed UI assets (brotli/gzip),

@@ -7,8 +7,11 @@ Firebase-Analytics-like product analytics for every app, self-hosted, privacy-fr
 - Custom events (`task_started`, `screen_view`, `purchase`) with properties.
 - Automatic events from SDKs: `session_start`, `app_open`, `screen_view`, `app_update`,
   first open, crash marker (optional).
-- Server-side automatic metrics: API requests, auth events, record create/update/delete
-  counts per collection (from the change bus).
+- Server-side automatic metrics: API requests (reads/writes/4xx/5xx, bytes in/out, latency
+  percentiles), auth events, record create/update/delete counts per collection (from the
+  change bus), and SQLite writer/reader/queue counters (`GET /api/v1/system/stats` and
+  `GET /api/v1/apps/{app}/stats`, kept in memory as 60 × 1-minute and 48 × 1-hour rings
+  until the persisted rollup store lands in Phase 4).
 - Dashboards: active users (DAU/WAU/MAU), sessions, events over time, top events,
   property breakdowns, funnels, retention cohorts, platform/version split.
 - Query API for custom charts and export.

@@ -58,6 +58,7 @@ for the few mutating helpers), and is cheap enough to leave enabled in productio
 | Rule explain | `POST /apps/{app}/rules:explain` | `explain_rule` | AST, rule class, compiled SQL, verdict for a sample row and `auth_as` principal |
 | Query explain | `POST /apps/{app}/query:explain` | `explain_query` | Compiled SQL and `EXPLAIN QUERY PLAN`, index suggestions |
 | Slow queries | `GET /apps/{app}/logs/slow` | `list_slow_queries` | Top queries by total time with plans |
+| App & system stats | `GET /apps/{app}/stats`, `GET /system/stats` | — | Traffic (1h minute / 48h hour rings), record ops, store writer/reader/queue counters, DB/WAL sizes, per-collection counters |
 | Realtime inspect | `GET /apps/{app}/realtime/inspect` | `inspect_realtime` | Connections, subscriptions, groups, last `seq`, queue depth, overflow counts |
 | Sync status | `GET /apps/{app}/sync/status?device=` | `sync_status` | Cursor, retention floor, pending ids, recent conflict decisions |
 | Health | `GET /system/health` | `check_health` | Writer queue, reader wait, app states, disk, backup age |

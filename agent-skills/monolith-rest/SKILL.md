@@ -27,9 +27,10 @@ Check this list before relying on a feature; the rest of this page is the target
   `GET .../records:count`, create, view (`fields`, `expand`, `ETag`, `If-None-Match` → 304),
   `PATCH` update (`If-Match` → 412), `PUT` upsert (201 when new, 200 when existing), delete (`If-Match`),
   `?dry_run=true` on all write endpoints, and `POST /api/v1/apps/{app}/batch`.
-- Debug endpoints: `POST /api/v1/apps/{app}/collections:diff`, `POST /api/v1/apps/{app}/rules:explain`,
+- Debug & stats endpoints: `POST /api/v1/apps/{app}/collections:diff`, `POST /api/v1/apps/{app}/rules:explain`,
   `POST /api/v1/apps/{app}/query:explain`, `GET /api/v1/apps/{app}/logs?request_id=...`,
-  `GET /api/v1/apps/{app}/logs/slow`.
+  `GET /api/v1/apps/{app}/logs/slow`, `GET /api/v1/system/stats`,
+  `GET /api/v1/apps/{app}/stats?counts=estimate|exact`.
 - Auth: only superuser tokens from `POST /api/v1/system/auth/login`. Without a token you are
   anonymous and the collection rules decide. A bad token is 401, never anonymous.
 - First superuser: `GET /api/v1/system/install` → `{"required": true}` on a fresh server.

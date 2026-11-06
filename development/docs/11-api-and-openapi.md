@@ -41,7 +41,7 @@ GET    /openapi.json      GET /docs (Scalar/Redoc UI)    POST /mcp (MCP streamab
 ```
 GET|POST /collections   GET|PATCH|DELETE /collections/{c}   POST /collections:import   GET /collections:export
 GET|POST /keys          DELETE /keys/{id}
-GET|PATCH /settings     GET /logs   GET /logs/stats
+GET|PATCH /settings     GET /stats (?counts=estimate|exact) GET /logs   GET /logs/slow   GET /logs/stats
 GET|POST /backups       POST /backups/{id}/restore   GET /backups/{id}/download
 GET|POST /webhooks      GET /cron   POST /cron/{id}/run
 ```
@@ -50,7 +50,7 @@ GET|POST /webhooks      GET /cron   POST /cron/{id}/run
 
 ```
 GET|POST /apps      GET|PATCH|DELETE /apps/{app}     POST /apps/{app}/clone
-GET|PATCH /settings GET /health  GET /metrics (Prometheus, separate port optional)
+GET|PATCH /settings GET /health  GET /stats  GET /metrics (Prometheus, separate port optional)
 POST /superusers    POST /auth/login  POST /auth/mfa
 ```
 

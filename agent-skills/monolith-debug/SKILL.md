@@ -8,7 +8,7 @@ description: Systematically debug anything involving a Monolith server: failed r
 Work in this order. Do not change code before step 3.
 
 1. **Capture facts.** Request id (`X-Request-Id`), HTTP status, problem+json `type`/`detail`, timestamp, app, collection, credential type.
-2. **Check server health.** `GET /api/v1/system/health` (writer queue depth, reader wait, app state). 503 + `Retry-After` means backpressure, not a bug.
+2. **Check server health & stats.** `GET /api/v1/system/health`, `GET /api/v1/system/stats`, and `GET /api/v1/apps/{app}/stats` (traffic rings, p50/p95/p99 latency, writer/reader queue depth, busy 503 count, DB/WAL bytes). 503 + `Retry-After` means backpressure, not a bug.
 3. **Trace the request.** `GET /api/v1/apps/{app}/logs?request_id=<id>` shows route, principal, scopes, rule class, SQL shape, durations. MCP: `trace_request`.
 4. **Explain, do not guess.**
    - Rule/filter: `POST /api/v1/apps/{app}/rules:explain {collection, op, filter?, auth_as?}` returns parsed AST, class (RowLocal/Relational), compiled SQL and a verdict for a sample row/principal. MCP: `explain_rule`.
