@@ -55,7 +55,7 @@ Postgres prototype, PocketBase baseline, DuckDB A1–A3, Turso check, Docker ima
 ## In progress — Phase 1 (core data plane)
 
 Order of work: rules → contract → store tweaks → auth → core → server → admin UI (all landed).
-Next: `:isset`/`:changed` write-rule modifiers, then the other follow-ups below, then the exit gates.
+Next: remaining Phase 1 follow-ups below, then the exit gates.
 
 - [x] `crates/monolith-rules`: parser, type checker, SQL compiler (IS/IS NOT, LIKE ESCAPE,
       IN, EXISTS semi-joins for single relations up to 4 hops), in-memory predicate,
@@ -80,8 +80,7 @@ Next: `:isset`/`:changed` write-rule modifiers, then the other follow-ups below,
       256-bit token in memory, 1 h TTL, single use; env credential bootstrap removed
 - [x] Admin UI redesign (PocketBase layout): icon rail, collections sidebar, records grid, schema and
       record drawers, typed record form, install page, light/dark tokens, no external assets (27 KB gzip JS)
-- [ ] Manual check in a browser: `pnpm dev`, open the printed setup link
-      (not run yet: starting servers on the host needs owner OK)
+- [x] Manual check in a browser: `pnpm dev`, open the printed setup link
 - [x] `pnpm dev`: backend + admin UI together (`tools/dev.mjs`), root scripts restructured
 - [x] `monolith superuser create <email>` CLI for headless setup (doc 18): password via
       no-echo prompt or piped stdin, never argv; safe next to a running server
@@ -97,7 +96,8 @@ Next: `:isset`/`:changed` write-rule modifiers, then the other follow-ups below,
       and all-of `=` operators across relation hops, multi-relation `expand`, and Admin UI schema/record drawer support
 - [x] `@collection.<name>(:<alias>)?.<path>` cross-collection joins (up to 4 aliases, shared within `&&` scopes)
       and `<coll>_via_<field>` back-relations (over both single and multi relations) in rules, filters, and `expand`
-- [ ] Remaining Phase 1 follow-ups: `:isset`/`:changed`, `fields` projection in SQL (now done at encode),
+- [x] `@request.body.<field>:isset` and `@request.body.<field>:changed` write-rule modifiers (with bitmask tracking in `Body` and `rules:explain`)
+- [ ] Remaining Phase 1 follow-ups: `fields` projection in SQL (now done at encode),
       superuser TOTP + token revocation, docs/api/rest.md + rules.md, precompressed UI assets (brotli/gzip),
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
 - [ ] Phase 1 exit: M1–M6 gates, ported PocketBase rules vectors

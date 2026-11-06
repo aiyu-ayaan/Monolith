@@ -16,13 +16,13 @@ description: Write and review Monolith access rules and filters (PocketBase-comp
 ## Implemented today (Phase 1 rules engine)
 
 - Works: `= != > >= < <= ~ !~`, any-of `?=` `?!=` `?>` `?>=` `?<` `?<=` `?~` `?!~`, `&&`, `||`,
-  parentheses, `in (...)`, `:lower`, `@request.auth.id`, `@request.auth.collectionName`,
-  `@request.auth.<claim>`, `@request.body.<field>`, `@now`, single- and multi-relation paths up
-  to 4 hops (`owner.org.plan = 'pro'`, `tags.name ?= 'rust'`, `tags = null` for empty check),
-  `@collection.<name>(:<alias>)?.<path>` joins (up to 4 aliases, shared within `&&` scopes),
-  `<coll>_via_<field>` back-relations (over single and multi relations),
+  parentheses, `in (...)`, `:lower`, `:isset`, `:changed`, `@request.auth.id`,
+  `@request.auth.collectionName`, `@request.auth.<claim>`, `@request.body.<field>`, `@now`,
+  single- and multi-relation paths up to 4 hops (`owner.org.plan = 'pro'`, `tags.name ?= 'rust'`,
+  `tags = null` for empty check), `@collection.<name>(:<alias>)?.<path>` joins (up to 4 aliases,
+  shared within `&&` scopes), `<coll>_via_<field>` back-relations (over single and multi relations),
   and `POST /api/v1/apps/{app}/rules:explain`.
-- Not yet: `:isset`/`:changed`/`:length`/`:each`, `@today` and friends, `@request.query.*`, `@request.key.*`.
+- Not yet: `:length`/`:each`, `@today` and friends, `@request.query.*`, `@request.key.*`.
 - Types are checked when the collection is saved: `title = 1` or an unknown field is a 400.
   Dates compare with RFC 3339 strings; relations and ids compare with base32 id strings.
   `@request.auth.id != ""` means "signed in".

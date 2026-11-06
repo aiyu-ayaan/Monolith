@@ -57,10 +57,11 @@ impl Principal {
         }
     }
 
-    fn ctx<'a>(&'a self, body: Option<&'a [Value]>, now: i64) -> Ctx<'a> {
+    fn ctx<'a>(&'a self, body: Option<(&'a [Value], u64)>, now: i64) -> Ctx<'a> {
         Ctx {
             auth: self.auth.as_ref(),
-            body,
+            body: body.map(|(b, _)| b),
+            body_isset: body.map(|(_, m)| m),
             now_us: now,
         }
     }
@@ -572,7 +573,7 @@ impl App {
         let sql = match rule {
             Some(r) => {
                 let slots = body.rule_slots();
-                params.extend(r.bind(&p.ctx(Some(&slots), now)));
+                params.extend(r.bind(&p.ctx(Some((&slots, body.isset_mask())), now)));
                 c.sql.insert.clone()
             }
             None => c.sql.insert_su.clone(),
@@ -643,7 +644,7 @@ impl App {
         let base_sql = match rule {
             Some(r) => {
                 let slots = body.rule_slots();
-                rule_binds = r.bind(&p.ctx(Some(&slots), now));
+                rule_binds = r.bind(&p.ctx(Some((&slots, body.isset_mask())), now));
                 params.extend(rule_binds.iter().cloned());
                 &c.sql.update
             }

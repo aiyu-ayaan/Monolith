@@ -52,6 +52,16 @@ fn value<'a>(t: &Term, row: &'a [Value], bound: &'a [Value]) -> Cow<'a> {
     let (v, lower) = match t {
         Term::Col { slot, lower, .. } => (row.get(*slot).unwrap_or(&Value::Null), *lower),
         Term::Param { idx, lower } => (&bound[*idx], *lower),
+        Term::Changed {
+            slot,
+            isset_idx,
+            val_idx,
+            ..
+        } => {
+            let changed = matches!(bound[*isset_idx], Value::Int(1))
+                && !is(row.get(*slot).unwrap_or(&Value::Null), &bound[*val_idx]);
+            return Cow::Owned(Value::Int(i64::from(changed)));
+        }
     };
     match v {
         // SQLite's built-in lower() folds ASCII only.

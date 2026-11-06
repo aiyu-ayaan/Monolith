@@ -15,6 +15,7 @@ pub(crate) enum Source {
     AuthCollection,
     AuthClaim(Box<str>),
     Body(usize),
+    BodyIsset(usize),
     Now,
 }
 
@@ -66,13 +67,20 @@ pub(crate) enum Term {
         idx: usize,
         lower: bool,
     },
+    /// `@request.body.<field>:changed`: `(? AND t."<column>" IS NOT ?)`.
+    Changed {
+        column: String,
+        slot: usize,
+        isset_idx: usize,
+        val_idx: usize,
+    },
 }
 
 impl Term {
     fn join_mask(&self) -> u8 {
         match self {
             Term::Col { root, .. } => root.mask(),
-            Term::Param { .. } => 0,
+            Term::Param { .. } | Term::Changed { .. } => 0,
         }
     }
 }
@@ -430,19 +438,63 @@ impl Checker<'_> {
                     return Ok(Pre::Flex(Source::AuthClaim((*claim).into()), lower));
                 }
                 ["@request", "body", name] => {
-                    self.see(Class::AuthOnly);
                     let f = self
                         .schema
                         .field(self.collection, name)
                         .ok_or_else(|| RuleError::UnknownField(format!("@request.body.{name}")))?;
-                    if matches!(f.kind, FieldKind::Relation { multi: true, .. }) {
-                        return Err(RuleError::Unsupported(
-                            "@request.body on multi-relation fields",
-                        ));
+                    match modifier {
+                        Some(Modifier::Isset) => {
+                            self.see(Class::AuthOnly);
+                            return typed_param(self, Source::BodyIsset(f.slot), Ty::Bool);
+                        }
+                        Some(Modifier::Changed) => {
+                            if matches!(f.kind, FieldKind::Relation { multi: true, .. }) {
+                                return Err(RuleError::Unsupported(
+                                    ":changed on multi-relation fields",
+                                ));
+                            }
+                            self.see(Class::RowLocal);
+                            self.params.push(Param {
+                                src: Source::BodyIsset(f.slot),
+                                ty: Ty::Bool,
+                                like: false,
+                            });
+                            let isset_idx = self.params.len() - 1;
+                            self.params.push(Param {
+                                src: Source::Body(f.slot),
+                                ty: kind_ty(&f.kind),
+                                like: false,
+                            });
+                            let val_idx = self.params.len() - 1;
+                            return Ok(Pre::Typed(
+                                Term::Changed {
+                                    column: (*name).to_owned(),
+                                    slot: f.slot,
+                                    isset_idx,
+                                    val_idx,
+                                },
+                                Ty::Bool,
+                                Root::Main,
+                                vec![],
+                            ));
+                        }
+                        None | Some(Modifier::Lower) => {
+                            self.see(Class::AuthOnly);
+                            if matches!(f.kind, FieldKind::Relation { multi: true, .. }) {
+                                return Err(RuleError::Unsupported(
+                                    "@request.body on multi-relation fields",
+                                ));
+                            }
+                            return typed_param(self, Source::Body(f.slot), kind_ty(&f.kind));
+                        }
                     }
-                    return typed_param(self, Source::Body(f.slot), kind_ty(&f.kind));
                 }
                 ["@collection", raw_coll, rest @ ..] if !rest.is_empty() => {
+                    if matches!(modifier, Some(Modifier::Isset | Modifier::Changed)) {
+                        return Err(RuleError::Type(
+                            ":isset and :changed only apply to @request.body.<field>".into(),
+                        ));
+                    }
                     let (coll_name, alias_key) = match raw_coll.split_once(':') {
                         Some((c, a)) if !c.is_empty() && !a.is_empty() => (c, format!("{c}:{a}")),
                         Some(_) => return Err(RuleError::UnknownField(parts.join("."))),
@@ -467,6 +519,11 @@ impl Checker<'_> {
                 _ => return Err(RuleError::UnknownField(parts.join("."))),
             }
         } else {
+            if matches!(modifier, Some(Modifier::Isset | Modifier::Changed)) {
+                return Err(RuleError::Type(
+                    ":isset and :changed only apply to @request.body.<field>".into(),
+                ));
+            }
             (Root::Main, self.collection.to_owned(), p.as_slice())
         };
 
@@ -675,6 +732,16 @@ impl Param {
                 .and_then(|b| b.get(*slot))
                 .cloned()
                 .unwrap_or(Value::Null),
+            Source::BodyIsset(slot) => {
+                let set = match ctx.body_isset {
+                    Some(mask) => (mask >> *slot) & 1 != 0,
+                    None => ctx
+                        .body
+                        .and_then(|b| b.get(*slot))
+                        .is_some_and(|v| !matches!(v, Value::Null)),
+                };
+                Value::Int(i64::from(set))
+            }
             Source::Now => Value::Int(ctx.now_us),
         };
         // Coerce request values to the checked type so SQL and memory never see a
@@ -710,10 +777,15 @@ fn like_pattern(s: &str) -> String {
 }
 
 fn renumber(n: &mut Node, pos: &[usize]) {
-    let fix = |t: &mut Term| {
-        if let Term::Param { idx, .. } = t {
-            *idx = pos[*idx];
+    let fix = |t: &mut Term| match t {
+        Term::Param { idx, .. } => *idx = pos[*idx],
+        Term::Changed {
+            isset_idx, val_idx, ..
+        } => {
+            *isset_idx = pos[*isset_idx];
+            *val_idx = pos[*val_idx];
         }
+        Term::Col { .. } => {}
     };
     match n {
         Node::True => {}
@@ -966,6 +1038,16 @@ fn term(t: &Term, order: &mut Vec<usize>, out: &mut String) {
         Term::Param { idx, lower } => {
             order.push(*idx);
             (*lower, "?".to_owned())
+        }
+        Term::Changed {
+            column,
+            isset_idx,
+            val_idx,
+            ..
+        } => {
+            order.push(*isset_idx);
+            order.push(*val_idx);
+            (false, format!("(? AND t.\"{column}\" IS NOT ?)"))
         }
     };
     if lower {

@@ -40,6 +40,7 @@ fn rules(c: &mut Criterion) {
     let ctx = Ctx {
         auth: Some(&auth),
         body: None,
+        body_isset: None,
         now_us: 0,
     };
     c.bench_function("rules/bind", |b| b.iter(|| compiled.bind(black_box(&ctx))));

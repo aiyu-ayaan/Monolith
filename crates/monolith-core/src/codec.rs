@@ -195,6 +195,19 @@ impl Body {
         v.extend(self.values.iter().map(|x| x.clone().unwrap_or(Value::Null)));
         v
     }
+
+    /// Bitmask of slots explicitly present in the decoded JSON object.
+    pub fn isset_mask(&self) -> u64 {
+        let mut m = (u64::from(self.id.is_some()))
+            | (u64::from(self.created.is_some()) << 1)
+            | (u64::from(self.updated.is_some()) << 2);
+        for (i, (v, mr)) in self.values.iter().zip(&self.multi).enumerate() {
+            if v.is_some() || mr.is_some() {
+                m |= 1u64 << (FIRST_FIELD_SLOT + i);
+            }
+        }
+        m
+    }
 }
 
 struct BodySeed<'a> {
@@ -480,7 +493,7 @@ pub fn decode_body(c: &Collection, json: &[u8], create: bool) -> CoreResult<Body
 }
 
 /// Decodes a sample record/body for `rules:explain` without requiring fields to be present.
-pub fn decode_sample(c: &Collection, json: &[u8]) -> CoreResult<Vec<Value>> {
+pub fn decode_sample(c: &Collection, json: &[u8]) -> CoreResult<(Vec<Value>, u64)> {
     let mut errors = Vec::new();
     let mut de = serde_json::Deserializer::from_slice(json);
     let body = BodySeed {
@@ -493,7 +506,7 @@ pub fn decode_sample(c: &Collection, json: &[u8]) -> CoreResult<Vec<Value>> {
     .and_then(|b| de.end().map(|()| b))
     .map_err(|e| CoreError::BadRequest(format!("invalid sample JSON: {e}")))?;
     if errors.is_empty() {
-        Ok(body.rule_slots())
+        Ok((body.rule_slots(), body.isset_mask()))
     } else {
         Err(CoreError::Validation(errors))
     }

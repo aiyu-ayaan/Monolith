@@ -1253,4 +1253,72 @@ async fn collection_joins_and_back_relations_via_and_expand() {
         .as_array()
         .unwrap();
     assert_eq!(exp_projs.len(), 2);
+
+    // :isset and :changed write rules on projects:
+    // - create allows setting title + team, but forbids setting contributors (@request.body.contributors:isset = false)
+    // - update allows updating title, but forbids changing team (@request.body.team:changed = false)
+    app.put_collection(
+        def(json!({
+            "name":"projects",
+            "fields":[
+                {"name":"title","type":"text","required":true},
+                {"name":"team","type":"relation","collection":"teams","required":true},
+                {"name":"contributors","type":"relation","collection":"users","maxSelect":5}
+            ],
+            "rules":{
+                "list":"",
+                "view":"",
+                "create":"@request.body.contributors:isset = false",
+                "update":"@request.body.team:changed = false"
+            }
+        })),
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        app.create_record(
+            &anon(),
+            "projects",
+            json!({"title":"bad","team":tm_core["id"],"contributors":[u1["id"]]})
+                .to_string()
+                .as_bytes()
+        )
+        .await,
+        Err(CoreError::Forbidden(_))
+    ));
+    let p_new = parse(
+        &app.create_record(
+            &anon(),
+            "projects",
+            json!({"title":"ok","team":tm_core["id"]})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+    // Updating title without sending team, or sending the SAME team id, is allowed.
+    app.update_record(
+        &anon(),
+        "projects",
+        p_new["id"].as_str().unwrap(),
+        json!({"title":"ok-2","team":tm_core["id"]})
+            .to_string()
+            .as_bytes(),
+    )
+    .await
+    .unwrap();
+    // Changing team to tm_ops is rejected by @request.body.team:changed = false.
+    assert!(matches!(
+        app.update_record(
+            &anon(),
+            "projects",
+            p_new["id"].as_str().unwrap(),
+            json!({"team":tm_ops["id"]}).to_string().as_bytes()
+        )
+        .await,
+        Err(CoreError::NotFound(_))
+    ));
 }

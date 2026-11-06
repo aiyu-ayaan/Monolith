@@ -80,6 +80,9 @@ pub struct Ctx<'a> {
     pub auth: Option<&'a Auth>,
     /// `@request.body.*` values by field slot (write rules).
     pub body: Option<&'a [Value]>,
+    /// Optional bitmask of slots explicitly present in the request body JSON (for `:isset` / `:changed`).
+    /// When `None`, a slot is treated as set iff `body[slot]` is non-`Null`.
+    pub body_isset: Option<u64>,
     pub now_us: i64,
 }
 

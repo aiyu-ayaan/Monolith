@@ -183,6 +183,9 @@ fn random_operand(rng: &mut Rng) -> String {
         "@request.auth.collectionName",
         "@request.body.name",
         "@request.body.count",
+        "@request.body.name:isset",
+        "@request.body.name:changed",
+        "@request.body.count:changed",
         "@now",
     ];
     if rng.below(2) == 0 {
@@ -281,16 +284,19 @@ fn sql_and_predicate_agree_on_random_rules() {
         Ctx {
             auth: None,
             body: None,
+            body_isset: None,
             now_us: 2 * 86_400_000_000,
         },
         Ctx {
             auth: Some(&admin),
             body: Some(&body),
+            body_isset: Some((1 << 1) | (1 << 3) | (1 << 6)),
             now_us: 0,
         },
         Ctx {
             auth: Some(&odd),
             body: None,
+            body_isset: None,
             now_us: 3 * 86_400_000_000,
         },
     ];
@@ -331,6 +337,16 @@ fn handwritten_rules_agree() {
         collection: "users".into(),
         claims: vec![],
     };
+    let body = [
+        Value::Null,
+        Value::Text("alice".into()),
+        Value::Null,
+        Value::Int(1),
+        Value::Null,
+        Value::Null,
+        Value::Null,
+        Value::Null,
+    ];
     let owner = encode_string(&IDS[1]);
     let rules = [
         "owner = @request.auth.id".to_owned(),
@@ -340,6 +356,8 @@ fn handwritten_rules_agree() {
         "name !~ '%' && count in (1, 2, 3)".into(),
         "at > '1970-01-02' && at <= @now".into(),
         "count > score || score = 2".into(),
+        "@request.body.name:isset = true && @request.body.name:changed = false".into(),
+        "@request.body.owner:isset = false && @request.body.count:changed = true".into(),
         "".into(),
     ];
     for src in &rules {
@@ -348,7 +366,8 @@ fn handwritten_rules_agree() {
             Ctx::default(),
             Ctx {
                 auth: Some(&me),
-                body: None,
+                body: Some(&body),
+                body_isset: Some((1 << 1) | (1 << 3)),
                 now_us: 3 * 86_400_000_000,
             },
         ] {
@@ -705,5 +724,15 @@ fn type_and_access_errors() {
         )
         .unwrap_err(),
         RuleError::UnknownField(_)
+    ));
+    // :isset works on any @request.body field (including multi-relation); :changed rejects non-@request.body and multi-relation.
+    assert!(compile(&Schema, "t", "@request.body.tags:isset = false", Mode::Rule).is_ok());
+    assert!(matches!(
+        err("name:changed = false", Mode::Rule),
+        RuleError::Type(_)
+    ));
+    assert!(matches!(
+        err("@request.body.tags:changed = false", Mode::Rule),
+        RuleError::Unsupported(_)
     ));
 }

@@ -148,10 +148,13 @@ impl App {
         };
         let verdict = if row.is_some() || compiled.class <= Class::AuthOnly {
             let empty_row = vec![Value::Null; c.slots()];
-            let r = row.as_deref().unwrap_or(&empty_row);
+            let r = row
+                .as_ref()
+                .map_or(empty_row.as_slice(), |(v, _)| v.as_slice());
             let ctx = Ctx {
                 auth: req.auth.as_ref(),
-                body: body.as_deref(),
+                body: body.as_ref().map(|(v, _)| v.as_slice()),
+                body_isset: body.as_ref().map(|(_, m)| *m),
                 now_us: now_us(),
             };
             let bound = compiled.bind(&ctx);

@@ -17,6 +17,8 @@ pub enum Lit {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Modifier {
     Lower,
+    Isset,
+    Changed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -316,6 +318,8 @@ impl Parser {
                     }
                     let modif = match m {
                         "lower" => Modifier::Lower,
+                        "isset" => Modifier::Isset,
+                        "changed" => Modifier::Changed,
                         _ => return Err(RuleError::Unsupported(leak_modifier(m))),
                     };
                     *parts.last_mut().unwrap() = base.to_owned();
@@ -337,8 +341,7 @@ impl Parser {
 
 fn leak_modifier(m: &str) -> &'static str {
     match m {
-        "isset" | "changed" => "modifiers :isset and :changed (write rules, next stage)",
-        "length" | "each" => "modifiers :length and :each need multi-value fields",
+        "length" | "each" => "modifiers :length and :each",
         _ => "unknown modifier",
     }
 }
@@ -444,6 +447,18 @@ mod tests {
                 r: Operand::Lit(Lit::Str("x".into()))
             }
         );
+        assert_eq!(
+            parse("@request.body.role:changed = false").unwrap(),
+            Expr::Cmp {
+                l: Operand::Path {
+                    parts: vec!["@request".into(), "body".into(), "role".into()],
+                    modifier: Some(Modifier::Changed)
+                },
+                op: CmpOp::Eq,
+                any: false,
+                r: Operand::Lit(Lit::Bool(false))
+            }
+        );
     }
 
     #[test]
@@ -457,7 +472,7 @@ mod tests {
             "a ? 1",
             "a = 1 &&",
             "a.. = 1",
-            "a:changed = 1",
+            "a:length = 1",
             "a:b.c = 1",
         ] {
             assert!(parse(bad).is_err(), "{bad}");
