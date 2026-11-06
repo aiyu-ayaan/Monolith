@@ -105,3 +105,80 @@ export interface AppInfo {
 }
 
 export type RecordRow = { id: string; created: string; updated: string; _v: number } & Record<string, unknown>;
+
+// ---------- stats (GET /api/v1/system/stats, GET /api/v1/apps/{app}/stats) ----------
+
+export interface Traffic {
+  requests: number;
+  reads: number;
+  writes: number;
+  creates: number;
+  updates: number;
+  deletes: number;
+  errors4xx: number;
+  errors5xx: number;
+  bytesIn: number;
+  bytesOut: number;
+  avgUs: number;
+  maxUs: number;
+  p50Us: number;
+  p95Us: number;
+  p99Us: number;
+}
+
+export type TrafficPoint = Traffic & { t: number };
+
+export interface TrafficSeries {
+  total: Traffic;
+  lastHour: Traffic;
+  minutes: TrafficPoint[];
+  hours: TrafficPoint[];
+}
+
+export interface SystemStats {
+  since: string;
+  uptimeS: number;
+  memoryBytes: number | null;
+  appsTotal: number;
+  appsLoaded: number;
+  traffic: TrafficSeries;
+  apps: { name: string; loaded: boolean; dbBytes: number; walBytes: number; traffic: Traffic | null }[];
+}
+
+export interface StoreStats {
+  commits: number;
+  ops: number;
+  opsFailed: number;
+  mutations: number;
+  maxBatch: number;
+  commitAvgUs: number;
+  commitMaxUs: number;
+  reads: number;
+  readAvgUs: number;
+  busy: number;
+  writerQueue: number;
+  readerQueue: number;
+  readers: number;
+}
+
+export interface AppStats {
+  app: string;
+  since: string;
+  schemaVersion: number;
+  traffic: TrafficSeries;
+  store: StoreStats;
+  dbBytes: number;
+  walBytes: number;
+  collections: { name: string; records: number | null; reads: number; creates: number; updates: number; deletes: number }[];
+}
+
+export interface RequestLog {
+  requestId: string;
+  timestamp: string;
+  method: string;
+  path: string;
+  status: number;
+  durationUs: number;
+  superuser: boolean;
+  error?: string | null;
+}

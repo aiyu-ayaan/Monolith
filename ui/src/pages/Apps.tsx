@@ -44,6 +44,10 @@ export default function Apps() {
           <h1>Apps</h1>
           <p class="muted">Each app has its own database, collections and access rules.</p>
         </div>
+        <a class="btn secondary" href="#/analytics">
+          <Icon name="chart" size={16} />
+          Server analytics
+        </a>
       </header>
 
       <form class="create-bar" onSubmit={create}>
@@ -95,6 +99,9 @@ export default function Apps() {
                       <span class="muted small">Created {fmtDate(a.created)}</span>
                     </span>
                     <Icon name="chevronRight" />
+                  </a>
+                  <a class="icon-btn" href={`#/apps/${enc(a.name)}/analytics`} aria-label={`Analytics for ${a.name}`} title="App analytics">
+                    <Icon name="chart" />
                   </a>
                   <button class="icon-btn danger" aria-label={`Delete app ${a.name}`} title="Delete app" onClick={() => remove(a.name)}>
                     <Icon name="trash" />

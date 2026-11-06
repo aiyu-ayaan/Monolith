@@ -1,5 +1,5 @@
 import { createContext, createResource, createSignal, For, Show, useContext, type Resource } from "solid-js";
-import { useNavigate, useParams, type RouteSectionProps } from "@solidjs/router";
+import { useLocation, useNavigate, useParams, type RouteSectionProps } from "@solidjs/router";
 import { api, enc, type ApiError, type Collection } from "../api";
 import { Icon, toast } from "../ui";
 import ErrorBox from "./ErrorBox";
@@ -17,6 +17,7 @@ export const useApp = () => useContext(Ctx)!;
 /** One app: collections sidebar + routed content (PocketBase layout). */
 export default function AppLayout(props: RouteSectionProps) {
   const params = useParams();
+  const loc = useLocation();
   const navigate = useNavigate();
   const [cols, { refetch }] = createResource(
     () => params.app,
@@ -26,6 +27,7 @@ export default function AppLayout(props: RouteSectionProps) {
   const [editing, setEditing] = createSignal<{ c: Collection | null } | null>(null);
   const shown = () => (cols()?.items ?? []).filter((c) => c.name.includes(q().trim().toLowerCase()));
   const appPath = () => `/apps/${enc(params.app!)}`;
+  const onAnalytics = () => loc.pathname.endsWith("/analytics");
 
   return (
     <Ctx.Provider value={{ collections: cols, editSchema: (c) => setEditing({ c }) }}>
@@ -45,6 +47,14 @@ export default function AppLayout(props: RouteSectionProps) {
           </div>
           <ErrorBox error={cols.error as ApiError | undefined} />
           <nav class="side-nav">
+            <ul>
+              <li>
+                <a href={`#${appPath()}/analytics`} classList={{ active: onAnalytics() }} aria-current={onAnalytics() ? "page" : undefined}>
+                  <Icon name="chart" size={16} />
+                  <span>Analytics</span>
+                </a>
+              </li>
+            </ul>
             <p class="side-label">Collections</p>
             <ul>
               <For each={shown()} fallback={<li class="muted small side-empty">{cols.loading ? "Loading…" : "No collections"}</li>}>
