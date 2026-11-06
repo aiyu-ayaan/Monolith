@@ -4,8 +4,9 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossbeam_channel::{
     Receiver, RecvTimeoutError, SendTimeoutError, Sender, TrySendError, bounded,
@@ -16,7 +17,7 @@ use tokio::sync::{broadcast, oneshot};
 
 use crate::{
     AppStore, Change, ChangeBatch, Error, Id, MigrationPlan, Op, Query, Result, Row, SnapshotInfo,
-    Value, WriteOp, WriteResult,
+    StoreStats, Value, WriteOp, WriteResult,
 };
 
 #[derive(Debug, Clone)]
@@ -102,12 +103,29 @@ enum WriterMsg {
 
 type ReadJob = Box<dyn FnOnce(&Connection) + Send>;
 
+/// Relaxed atomics: a few ns per op, off the SQLite critical section.
+#[derive(Default)]
+struct Counters {
+    commits: AtomicU64,
+    ops: AtomicU64,
+    ops_failed: AtomicU64,
+    mutations: AtomicU64,
+    max_batch: AtomicU64,
+    commit_us: AtomicU64,
+    commit_us_max: AtomicU64,
+    reads: AtomicU64,
+    read_us: AtomicU64,
+    busy: AtomicU64,
+}
+
 /// Threads stop when the store is dropped and their queues drain.
 pub struct SqliteStore {
     writer: Sender<WriterMsg>,
     readers: Sender<ReadJob>,
     bus: broadcast::Sender<ChangeBatch>,
     read_timeout: Duration,
+    n_readers: usize,
+    stats: Arc<Counters>,
 }
 
 impl From<rusqlite::Error> for Error {
@@ -197,7 +215,9 @@ impl SqliteStore {
         let (writer, writer_rx) = bounded(cfg.writer_queue);
         let (readers, reader_rx) = bounded::<ReadJob>(cfg.reader_queue);
 
+        let stats = Arc::new(Counters::default());
         let state = Writer {
+            stats: stats.clone(),
             conn,
             bus: bus.clone(),
             max_batch: cfg.max_batch,
@@ -215,7 +235,36 @@ impl SqliteStore {
             readers,
             bus,
             read_timeout: cfg.read_timeout,
+            n_readers: cfg.readers,
+            stats,
         })
+    }
+
+    /// Counter snapshot plus current queue depths.
+    pub fn stats(&self) -> StoreStats {
+        let c = &*self.stats;
+        StoreStats {
+            commits: c.commits.load(Relaxed),
+            ops: c.ops.load(Relaxed),
+            ops_failed: c.ops_failed.load(Relaxed),
+            mutations: c.mutations.load(Relaxed),
+            max_batch: c.max_batch.load(Relaxed),
+            commit_us_total: c.commit_us.load(Relaxed),
+            commit_us_max: c.commit_us_max.load(Relaxed),
+            reads: c.reads.load(Relaxed),
+            read_us_total: c.read_us.load(Relaxed),
+            busy: c.busy.load(Relaxed),
+            writer_queue: self.writer.len() as u64,
+            reader_queue: self.readers.len() as u64,
+            readers: self.n_readers as u64,
+        }
+    }
+
+    fn count_busy<T>(&self, r: Result<T>) -> Result<T> {
+        if matches!(r, Err(Error::Busy)) {
+            self.stats.busy.fetch_add(1, Relaxed);
+        }
+        r
     }
 
     async fn read<T: Send + 'static>(
@@ -223,9 +272,22 @@ impl SqliteStore {
         f: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
     ) -> Result<T> {
         let (tx, rx) = oneshot::channel();
+        let stats = self.stats.clone();
         let job: ReadJob = Box::new(move |c| {
-            let _ = tx.send(f(c));
+            let t = Instant::now();
+            let r = f(c);
+            stats.reads.fetch_add(1, Relaxed);
+            stats
+                .read_us
+                .fetch_add(t.elapsed().as_micros() as u64, Relaxed);
+            let _ = tx.send(r);
         });
+        let sent = self.count_busy(self.enqueue_read(job).await);
+        sent?;
+        rx.await.map_err(|_| Error::Closed)?
+    }
+
+    async fn enqueue_read(&self, job: ReadJob) -> Result<()> {
         match self.readers.try_send(job) {
             Ok(()) => {}
             Err(TrySendError::Full(job)) if !self.read_timeout.is_zero() => {
@@ -241,7 +303,7 @@ impl SqliteStore {
             }
             Err(e) => return Err(send_err(e)),
         }
-        rx.await.map_err(|_| Error::Closed)?
+        Ok(())
     }
 
     async fn send_write<T>(
@@ -249,7 +311,7 @@ impl SqliteStore {
         msg: impl FnOnce(oneshot::Sender<Result<T>>) -> WriterMsg,
     ) -> Result<T> {
         let (tx, rx) = oneshot::channel();
-        self.writer.try_send(msg(tx)).map_err(send_err)?;
+        self.count_busy(self.writer.try_send(msg(tx)).map_err(send_err))?;
         rx.await.map_err(|_| Error::Closed)?
     }
 }
@@ -351,6 +413,7 @@ impl Reply {
 }
 
 struct Writer {
+    stats: Arc<Counters>,
     conn: Connection,
     bus: broadcast::Sender<ChangeBatch>,
     max_batch: usize,
@@ -430,6 +493,8 @@ impl Writer {
         let start_seq = self.next_seq;
         let start_hlc = self.hlc;
         let ts = now_us();
+        let started = Instant::now();
+        let n_ops = batch.len() as u64;
         if let Err(e) = self.conn.execute_batch("BEGIN IMMEDIATE") {
             let msg = e.to_string();
             batch.drain(..).for_each(|m| Reply::unrun(m).fail(&msg));
@@ -487,6 +552,19 @@ impl Writer {
         if let Err(e) = self.conn.execute_batch("COMMIT") {
             return self.abort(e, start_seq, start_hlc, replies, changes);
         }
+        let s = &*self.stats;
+        let us = started.elapsed().as_micros() as u64;
+        let failed = replies
+            .iter()
+            .filter(|r| matches!(r, Reply::Write(_, Err(_)) | Reply::Schema(_, Err(_))))
+            .count() as u64;
+        s.commits.fetch_add(1, Relaxed);
+        s.ops.fetch_add(n_ops, Relaxed);
+        s.ops_failed.fetch_add(failed, Relaxed);
+        s.mutations.fetch_add(changes.len() as u64, Relaxed);
+        s.max_batch.fetch_max(n_ops, Relaxed);
+        s.commit_us.fetch_add(us, Relaxed);
+        s.commit_us_max.fetch_max(us, Relaxed);
         replies.drain(..).for_each(Reply::send);
         if !changes.is_empty() {
             // No receivers is fine: consumers can always read the persisted log.
@@ -504,6 +582,9 @@ impl Writer {
         changes: &mut Vec<Change>,
     ) {
         let _ = self.conn.execute_batch("ROLLBACK");
+        let n = replies.len() as u64;
+        self.stats.ops.fetch_add(n, Relaxed);
+        self.stats.ops_failed.fetch_add(n, Relaxed);
         self.next_seq = start_seq;
         self.hlc = start_hlc;
         changes.clear();

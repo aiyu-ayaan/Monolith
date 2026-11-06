@@ -125,6 +125,13 @@ async fn bad_op_does_not_poison_the_batch() {
         .await
         .unwrap();
     assert_eq!(rows, vec![vec![Value::Int(1)], vec![Value::Int(4)]]);
+
+    // Schema + 4 writes; 2 failed; 2 committed rows; the SELECT is one read.
+    let st = f.store.stats();
+    assert_eq!((st.ops, st.ops_failed, st.mutations), (5, 2, 2));
+    assert!(st.commits >= 2 && st.commits <= 5 && st.max_batch >= 1);
+    assert_eq!(st.reads, 1);
+    assert_eq!((st.busy, st.writer_queue), (0, 0));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -212,6 +219,11 @@ async fn full_writer_queue_is_busy_not_growth() {
     .await;
     assert!(results.iter().any(|r| matches!(r, Err(Error::Busy))));
     assert!(results.iter().any(|r| r.is_ok()));
+    let busy = results
+        .iter()
+        .filter(|r| matches!(r, Err(Error::Busy)))
+        .count();
+    assert_eq!(f.store.stats().busy, busy as u64);
 }
 
 #[tokio::test]

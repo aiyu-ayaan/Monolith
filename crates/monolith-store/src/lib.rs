@@ -108,6 +108,24 @@ pub struct MigrationPlan {
     pub statements: Vec<String>,
 }
 
+/// Engine counters since open (doc 16 §5). Plain numbers; callers serialize.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StoreStats {
+    pub commits: u64,
+    pub ops: u64,
+    pub ops_failed: u64,
+    pub mutations: u64,
+    pub max_batch: u64,
+    pub commit_us_total: u64,
+    pub commit_us_max: u64,
+    pub reads: u64,
+    pub read_us_total: u64,
+    pub busy: u64,
+    pub writer_queue: u64,
+    pub reader_queue: u64,
+    pub readers: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SnapshotInfo {
     pub bytes: u64,
