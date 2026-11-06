@@ -3,12 +3,18 @@
 pub mod app;
 pub mod codec;
 pub mod ddl;
+pub mod debug;
 pub mod error;
 pub mod list;
 pub mod schema;
 pub mod system;
 
-pub use app::{App, BatchItem, BatchKind, ListParams, Principal};
+pub use app::{
+    App, BatchItem, BatchKind, ListParams, Principal, ReadOpts, RecordOut, TotalMode, WriteOpts,
+};
+pub use debug::{ExplainQueryReq, ExplainQueryResp, ExplainRuleReq, ExplainRuleResp, RequestLog};
 pub use error::{CoreError, CoreResult, FieldError};
+pub use monolith_rules::Auth;
+pub use monolith_store::Value;
 pub use schema::{Collection, CollectionDef, Schema};
 pub use system::{AppInfo, Registry};

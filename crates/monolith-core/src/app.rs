@@ -1,11 +1,13 @@
 //! One app's runtime: its store, the current compiled schema, record operations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use monolith_rules::{Auth, Compiled, Ctx};
+use monolith_rules::{Auth, Class, Compiled, Ctx, Mode, compile};
 use monolith_store::id::{decode as decode_id, new_id};
 use monolith_store::{
     AppStore, Error as StoreError, Id, MigrationPlan, Mutation, Op, Query, SqliteConfig,
@@ -14,13 +16,15 @@ use monolith_store::{
 
 use crate::codec::{self, Body};
 use crate::ddl::{self, sql_str};
+use crate::debug::RequestLog;
 use crate::error::{CoreError, CoreResult};
 use crate::list::{self, ListPlan};
-use crate::schema::{Collection, CollectionDef, Schema};
+use crate::schema::{Collection, CollectionDef, FieldType, Schema};
 
 pub const MAX_LIMIT: usize = 1000;
 pub const DEFAULT_LIMIT: usize = 50;
 pub const MAX_BATCH: usize = 500;
+pub const MAX_EXPAND_DEPTH: usize = 4;
 const PLAN_CACHE: usize = 4096;
 const ID_PAST_US: i64 = 30 * 86_400_000_000;
 const ID_FUTURE_US: i64 = 5 * 60_000_000;
@@ -65,6 +69,14 @@ impl Principal {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TotalMode {
+    #[default]
+    None,
+    Exact,
+    Estimate,
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct ListParams {
     pub filter: String,
@@ -72,6 +84,30 @@ pub struct ListParams {
     pub limit: Option<usize>,
     pub cursor: Option<String>,
     pub fields: Option<String>,
+    pub expand: Option<String>,
+    pub total: TotalMode,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct WriteOpts {
+    pub dry_run: bool,
+    pub if_match: Option<u64>,
+    pub expand: Option<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ReadOpts {
+    pub fields: Option<String>,
+    pub expand: Option<String>,
+    pub if_none_match: Option<u64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordOut {
+    pub json: Vec<u8>,
+    pub version: u64,
+    pub created: bool,
+    pub not_modified: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +126,7 @@ pub struct BatchItem<'a> {
 }
 
 type PlanKey = (u64, String, bool, String, String, Option<u32>);
+type ExpandMaps = Vec<HashMap<Id, Vec<u8>>>;
 
 pub struct App {
     pub name: String,
@@ -99,6 +136,7 @@ pub struct App {
     schema_lock: tokio::sync::Mutex<()>,
     // shortcut: cleared when full instead of LRU; fine until profiles say otherwise.
     plans: Mutex<HashMap<PlanKey, Arc<ListPlan>>>,
+    pub(crate) logs: Mutex<VecDeque<RequestLog>>,
 }
 
 fn rule_ref<'a>(
@@ -114,6 +152,98 @@ fn rule_ref<'a>(
 
 fn record_id(s: &str) -> CoreResult<Id> {
     decode_id(s).ok_or(CoreError::NotFound("record"))
+}
+
+fn row_version(row: &[Value]) -> u64 {
+    match row.get(3) {
+        Some(Value::Int(v)) => *v as u64,
+        _ => 0,
+    }
+}
+
+fn parse_fields(c: &Collection, fields: Option<&str>, su: bool) -> CoreResult<Option<Vec<usize>>> {
+    match fields {
+        None => Ok(None),
+        Some(f) => Ok(Some(
+            f.split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|name| {
+                    c.slot(name)
+                        .filter(|&s| c.field_at(s).is_none_or(|f| su || !f.hidden))
+                        .ok_or_else(|| {
+                            CoreError::BadRequest(format!("unknown field '{name}' in fields"))
+                        })
+                })
+                .collect::<CoreResult<Vec<_>>>()?,
+        )),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ExpandNode {
+    field: String,
+    slot: usize,
+    target: Arc<Collection>,
+    children: Vec<ExpandNode>,
+}
+
+fn parse_expand(
+    schema: &Schema,
+    c: &Collection,
+    expand: Option<&str>,
+    su: bool,
+) -> CoreResult<Vec<ExpandNode>> {
+    let Some(expand) = expand.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let mut roots: Vec<ExpandNode> = Vec::new();
+    for raw_path in expand.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let segs: Vec<&str> = raw_path.split('.').collect();
+        if segs.is_empty() || segs.len() > MAX_EXPAND_DEPTH {
+            return Err(CoreError::BadRequest(format!(
+                "expand path '{raw_path}' exceeds max depth {MAX_EXPAND_DEPTH}"
+            )));
+        }
+        let mut cur_coll = c;
+        let mut level = &mut roots;
+        for seg in segs {
+            let slot = cur_coll.slot(seg).ok_or_else(|| {
+                CoreError::BadRequest(format!(
+                    "unknown expand field '{seg}' on '{}'",
+                    cur_coll.def.name
+                ))
+            })?;
+            let f = cur_coll
+                .field_at(slot)
+                .filter(|f| f.kind == FieldType::Relation && (su || !f.hidden))
+                .ok_or_else(|| {
+                    CoreError::BadRequest(format!(
+                        "field '{seg}' on '{}' is not a relation",
+                        cur_coll.def.name
+                    ))
+                })?;
+            let target_name = f.collection.as_deref().ok_or_else(|| {
+                CoreError::BadRequest(format!("relation '{seg}' has no target collection"))
+            })?;
+            let target = schema.get(target_name)?;
+            let pos = match level.iter().position(|n| n.slot == slot) {
+                Some(i) => i,
+                None => {
+                    level.push(ExpandNode {
+                        field: seg.to_owned(),
+                        slot,
+                        target: target.clone(),
+                        children: Vec::new(),
+                    });
+                    level.len() - 1
+                }
+            };
+            cur_coll = target;
+            level = &mut level[pos].children;
+        }
+    }
+    Ok(roots)
 }
 
 /// Client-made ids must be real UUIDv7s with a sane timestamp (doc 05 §2).
@@ -178,6 +308,7 @@ impl App {
             schema: RwLock::new(Arc::new(schema)),
             schema_lock: tokio::sync::Mutex::new(()),
             plans: Mutex::new(HashMap::new()),
+            logs: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -283,21 +414,25 @@ impl App {
 
     // ---------- records ----------
 
-    fn create_mutation(
+    fn create_mutation_with_id(
         &self,
         p: &Principal,
         c: &Collection,
         json: &[u8],
+        forced_id: Option<Id>,
         now: i64,
     ) -> CoreResult<Mutation> {
         let rule = rule_ref(p, &c.rules.create, "the create rule allows superusers only")?;
         let body = codec::decode_body(c, json, true)?;
-        let id = match body.id {
-            Some(id) => {
+        let id = match (forced_id, body.id) {
+            (Some(fid), Some(bid)) if fid != bid => {
+                return Err(CoreError::BadRequest("body id must match path id".into()));
+            }
+            (Some(id), _) | (None, Some(id)) => {
                 check_client_id(&id, now)?;
                 id
             }
-            None => new_id(),
+            (None, None) => new_id(),
         };
         let mut params = vec![
             Value::Blob(id.into()),
@@ -327,14 +462,25 @@ impl App {
         })
     }
 
-    fn update_mutation(
+    fn create_mutation(
+        &self,
+        p: &Principal,
+        c: &Collection,
+        json: &[u8],
+        now: i64,
+    ) -> CoreResult<Mutation> {
+        self.create_mutation_with_id(p, c, json, None, now)
+    }
+
+    fn update_mutation_with(
         &self,
         p: &Principal,
         c: &Collection,
         id: Id,
         json: &[u8],
+        if_match: Option<u64>,
         now: i64,
-    ) -> CoreResult<Mutation> {
+    ) -> CoreResult<(Mutation, Vec<Value>)> {
         let rule = rule_ref(p, &c.rules.update, "the update rule allows superusers only")?;
         let body: Body = codec::decode_body(c, json, false)?;
         let mut params = vec![Value::Int(now), Value::Null, Value::Null];
@@ -345,24 +491,91 @@ impl App {
             params.push(v.clone().unwrap_or(Value::Null));
         }
         params.push(Value::Blob(id.into()));
-        let sql = match rule {
+        let mut rule_binds = Vec::new();
+        let base_sql = match rule {
             Some(r) => {
                 let slots = body.rule_slots();
-                params.extend(r.bind(&p.ctx(Some(&slots), now)));
-                c.sql.update.clone()
+                rule_binds = r.bind(&p.ctx(Some(&slots), now));
+                params.extend(rule_binds.iter().cloned());
+                &c.sql.update
             }
-            None => c.sql.update_su.clone(),
+            None => &c.sql.update_su,
         };
-        Ok(Mutation {
-            op: Op::Update,
-            coll: c.cid,
-            rid: id,
-            fields: Some(fields),
-            sql,
-            params,
-            seq_slot: Some(1),
-            hlc_slot: Some(2),
-        })
+        let sql = match if_match {
+            None => base_sql.clone(),
+            Some(v) => {
+                params.push(Value::Int(v as i64));
+                let ret = format!(" RETURNING {}", c.sql.cols);
+                let prefix = base_sql.strip_suffix(&ret).unwrap_or(base_sql);
+                format!("{prefix} AND t.\"_v\" = ?{ret}").into()
+            }
+        };
+        Ok((
+            Mutation {
+                op: Op::Update,
+                coll: c.cid,
+                rid: id,
+                fields: Some(fields),
+                sql,
+                params,
+                seq_slot: Some(1),
+                hlc_slot: Some(2),
+            },
+            rule_binds,
+        ))
+    }
+
+    fn update_mutation(
+        &self,
+        p: &Principal,
+        c: &Collection,
+        id: Id,
+        json: &[u8],
+        now: i64,
+    ) -> CoreResult<Mutation> {
+        self.update_mutation_with(p, c, id, json, None, now)
+            .map(|(m, _)| m)
+    }
+
+    fn delete_mutation_with(
+        &self,
+        p: &Principal,
+        c: &Collection,
+        id: Id,
+        if_match: Option<u64>,
+        now: i64,
+    ) -> CoreResult<(Mutation, Vec<Value>)> {
+        let rule = rule_ref(p, &c.rules.delete, "the delete rule allows superusers only")?;
+        let mut params = vec![Value::Blob(id.into())];
+        let mut rule_binds = Vec::new();
+        let base_sql = match rule {
+            Some(r) => {
+                rule_binds = r.bind(&p.ctx(None, now));
+                params.extend(rule_binds.iter().cloned());
+                &c.sql.delete
+            }
+            None => &c.sql.delete_su,
+        };
+        let sql = match if_match {
+            None => base_sql.clone(),
+            Some(v) => {
+                params.push(Value::Int(v as i64));
+                format!("{base_sql} AND t.\"_v\" = ?").into()
+            }
+        };
+        Ok((
+            Mutation {
+                op: Op::Delete,
+                coll: c.cid,
+                rid: id,
+                fields: None,
+                sql,
+                params,
+                seq_slot: None,
+                hlc_slot: None,
+            },
+            rule_binds,
+        ))
     }
 
     fn delete_mutation(
@@ -372,52 +585,216 @@ impl App {
         id: Id,
         now: i64,
     ) -> CoreResult<Mutation> {
-        let rule = rule_ref(p, &c.rules.delete, "the delete rule allows superusers only")?;
-        let mut params = vec![Value::Blob(id.into())];
-        let sql = match rule {
-            Some(r) => {
-                params.extend(r.bind(&p.ctx(None, now)));
-                c.sql.delete.clone()
-            }
-            None => c.sql.delete_su.clone(),
-        };
-        Ok(Mutation {
-            op: Op::Delete,
-            coll: c.cid,
-            rid: id,
-            fields: None,
-            sql,
-            params,
-            seq_slot: None,
-            hlc_slot: None,
-        })
+        self.delete_mutation_with(p, c, id, None, now)
+            .map(|(m, _)| m)
     }
 
     async fn write_one(
         &self,
         p: &Principal,
         m: Mutation,
+        dry_run: bool,
     ) -> CoreResult<monolith_store::WriteResult> {
         let insert = m.op == Op::Insert;
-        self.store
-            .write(WriteOp {
-                actor: p.actor(),
-                mutations: vec![m],
-            })
-            .await
-            .map_err(|e| match e {
-                // An insert only "misses" when its create rule said no.
-                StoreError::NotFound if insert => {
-                    CoreError::Forbidden("the create rule rejected this record")
-                }
-                e => e.into(),
-            })
+        let op = WriteOp {
+            actor: p.actor(),
+            mutations: vec![m],
+        };
+        let res = if dry_run {
+            self.store.write_dry_run(op).await
+        } else {
+            self.store.write(op).await
+        };
+        res.map_err(|e| match e {
+            // An insert only "misses" when its create rule said no.
+            StoreError::NotFound if insert => {
+                CoreError::Forbidden("the create rule rejected this record")
+            }
+            e => e.into(),
+        })
     }
 
-    fn encode_one(c: &Collection, row: &[Value], su: bool) -> Vec<u8> {
-        let mut out = Vec::with_capacity(256);
-        codec::write_record(&mut out, c, row, su, None);
-        out
+    /// Distinguishes a 412 `If-Match` version mismatch from a 404 (missing or rule-hidden).
+    async fn check_if_match_miss(
+        &self,
+        p: &Principal,
+        c: &Collection,
+        id: Id,
+        rule: &Option<Compiled>,
+        rule_binds: Vec<Value>,
+    ) -> CoreError {
+        let rule_sql = if p.superuser {
+            "1"
+        } else {
+            match rule {
+                Some(r) => r.sql.as_str(),
+                None => return CoreError::NotFound("record"),
+            }
+        };
+        let mut params = vec![Value::Blob(id.into())];
+        if !p.superuser {
+            params.extend(rule_binds);
+        }
+        let sql = format!(
+            "SELECT 1 FROM \"{}\" AS t WHERE t.\"id\" = ? AND ({rule_sql})",
+            c.def.name
+        );
+        match self
+            .store
+            .query(Query {
+                sql: sql.into(),
+                params,
+            })
+            .await
+        {
+            Ok(rows) if !rows.is_empty() => {
+                CoreError::PreconditionFailed("record _v does not match If-Match")
+            }
+            _ => CoreError::NotFound("record"),
+        }
+    }
+
+    fn resolve_expand<'a>(
+        &'a self,
+        p: &'a Principal,
+        rows: &'a [Vec<Value>],
+        nodes: &'a [ExpandNode],
+        now: i64,
+    ) -> Pin<Box<dyn Future<Output = CoreResult<ExpandMaps>> + Send + 'a>> {
+        Box::pin(async move {
+            let mut out = Vec::with_capacity(nodes.len());
+            for node in nodes {
+                let mut ids: Vec<Id> = Vec::new();
+                for r in rows {
+                    if let Some(Value::Blob(b)) = r.get(node.slot)
+                        && let Ok(id) = <&Id>::try_from(&b[..])
+                        && !ids.contains(id)
+                    {
+                        ids.push(*id);
+                    }
+                }
+                if ids.is_empty() || (!p.superuser && node.target.rules.view.is_none()) {
+                    out.push(HashMap::new());
+                    continue;
+                }
+                let placeholders = vec!["?"; ids.len()].join(", ");
+                let mut params: Vec<Value> =
+                    ids.iter().map(|id| Value::Blob((*id).into())).collect();
+                let rule_sql = if p.superuser {
+                    "1"
+                } else {
+                    let r = node.target.rules.view.as_ref().expect("checked Some above");
+                    params.extend(r.bind(&p.ctx(None, now)));
+                    r.sql.as_str()
+                };
+                let sql = format!(
+                    "SELECT {} FROM \"{}\" AS t WHERE t.\"id\" IN ({placeholders}) AND ({rule_sql})",
+                    node.target.sql.cols, node.target.def.name
+                );
+                let target_rows = self
+                    .store
+                    .query(Query {
+                        sql: sql.into(),
+                        params,
+                    })
+                    .await?;
+                let child_maps = if node.children.is_empty() || target_rows.is_empty() {
+                    Vec::new()
+                } else {
+                    self.resolve_expand(p, &target_rows, &node.children, now)
+                        .await?
+                };
+                let mut encoded_map = HashMap::with_capacity(target_rows.len());
+                for tr in &target_rows {
+                    let Some(Value::Blob(b)) = tr.first() else {
+                        continue;
+                    };
+                    let Ok(tid) = <&Id>::try_from(&b[..]) else {
+                        continue;
+                    };
+                    let child_exp: Vec<(&str, &[u8])> = node
+                        .children
+                        .iter()
+                        .zip(&child_maps)
+                        .filter_map(|(cn, cmap)| match tr.get(cn.slot) {
+                            Some(Value::Blob(cb)) => <&Id>::try_from(&cb[..])
+                                .ok()
+                                .and_then(|cid| cmap.get(cid))
+                                .map(|bytes| (cn.field.as_str(), bytes.as_slice())),
+                            _ => None,
+                        })
+                        .collect();
+                    let mut buf = Vec::with_capacity(256);
+                    codec::write_record_ext(
+                        &mut buf,
+                        &node.target,
+                        tr,
+                        p.superuser,
+                        None,
+                        &child_exp,
+                    );
+                    encoded_map.insert(*tid, buf);
+                }
+                out.push(encoded_map);
+            }
+            Ok(out)
+        })
+    }
+
+    async fn encode_single(
+        &self,
+        p: &Principal,
+        schema: &Schema,
+        c: &Collection,
+        row: &[Value],
+        only: Option<&[usize]>,
+        expand: Option<&str>,
+    ) -> CoreResult<RecordOut> {
+        let nodes = parse_expand(schema, c, expand, p.superuser)?;
+        let exp_maps = if nodes.is_empty() {
+            Vec::new()
+        } else {
+            let rows_slice = [row.to_vec()];
+            self.resolve_expand(p, &rows_slice, &nodes, now_us())
+                .await?
+        };
+        let row_exp: Vec<(&str, &[u8])> = nodes
+            .iter()
+            .zip(&exp_maps)
+            .filter_map(|(n, map)| match row.get(n.slot) {
+                Some(Value::Blob(b)) => <&Id>::try_from(&b[..])
+                    .ok()
+                    .and_then(|id| map.get(id))
+                    .map(|bytes| (n.field.as_str(), bytes.as_slice())),
+                _ => None,
+            })
+            .collect();
+        let mut json = Vec::with_capacity(256);
+        codec::write_record_ext(&mut json, c, row, p.superuser, only, &row_exp);
+        Ok(RecordOut {
+            json,
+            version: row_version(row),
+            created: false,
+            not_modified: false,
+        })
+    }
+
+    pub async fn create_record_with(
+        &self,
+        p: &Principal,
+        coll: &str,
+        json: &[u8],
+        opts: &WriteOpts,
+    ) -> CoreResult<RecordOut> {
+        let schema = self.schema();
+        let c = schema.get(coll)?;
+        let m = self.create_mutation(p, c, json, now_us())?;
+        let r = self.write_one(p, m, opts.dry_run).await?;
+        let mut out = self
+            .encode_single(p, &schema, c, &r.returned[0], None, opts.expand.as_deref())
+            .await?;
+        out.created = true;
+        Ok(out)
     }
 
     pub async fn create_record(
@@ -426,16 +803,23 @@ impl App {
         coll: &str,
         json: &[u8],
     ) -> CoreResult<Vec<u8>> {
-        let schema = self.schema();
-        let c = schema.get(coll)?;
-        let m = self.create_mutation(p, c, json, now_us())?;
-        let r = self.write_one(p, m).await?;
-        Ok(Self::encode_one(c, &r.returned[0], p.superuser))
+        Ok(self
+            .create_record_with(p, coll, json, &WriteOpts::default())
+            .await?
+            .json)
     }
 
-    pub async fn view_record(&self, p: &Principal, coll: &str, id: &str) -> CoreResult<Vec<u8>> {
+    pub async fn view_record_with(
+        &self,
+        p: &Principal,
+        coll: &str,
+        id: &str,
+        opts: &ReadOpts,
+    ) -> CoreResult<RecordOut> {
         let schema = self.schema();
         let c = schema.get(coll)?;
+        let only = parse_fields(c, opts.fields.as_deref(), p.superuser)?;
+        let _ = parse_expand(&schema, c, opts.expand.as_deref(), p.superuser)?;
         let rule = rule_ref(p, &c.rules.view, "the view rule allows superusers only")?;
         let mut params = vec![Value::Blob(record_id(id)?.into())];
         let sql = match rule {
@@ -447,7 +831,51 @@ impl App {
         };
         let rows = self.store.query(Query { sql, params }).await?;
         let row = rows.first().ok_or(CoreError::NotFound("record"))?;
-        Ok(Self::encode_one(c, row, p.superuser))
+        let version = row_version(row);
+        if opts.if_none_match == Some(version) {
+            return Ok(RecordOut {
+                json: Vec::new(),
+                version,
+                created: false,
+                not_modified: true,
+            });
+        }
+        self.encode_single(p, &schema, c, row, only.as_deref(), opts.expand.as_deref())
+            .await
+    }
+
+    pub async fn view_record(&self, p: &Principal, coll: &str, id: &str) -> CoreResult<Vec<u8>> {
+        Ok(self
+            .view_record_with(p, coll, id, &ReadOpts::default())
+            .await?
+            .json)
+    }
+
+    pub async fn update_record_with(
+        &self,
+        p: &Principal,
+        coll: &str,
+        id: &str,
+        json: &[u8],
+        opts: &WriteOpts,
+    ) -> CoreResult<RecordOut> {
+        let schema = self.schema();
+        let c = schema.get(coll)?;
+        let _ = parse_expand(&schema, c, opts.expand.as_deref(), p.superuser)?;
+        let rid = record_id(id)?;
+        let (m, rule_binds) =
+            self.update_mutation_with(p, c, rid, json, opts.if_match, now_us())?;
+        let r = match self.write_one(p, m, opts.dry_run).await {
+            Ok(r) => r,
+            Err(CoreError::NotFound(_)) if opts.if_match.is_some() => {
+                return Err(self
+                    .check_if_match_miss(p, c, rid, &c.rules.update, rule_binds)
+                    .await);
+            }
+            Err(e) => return Err(e),
+        };
+        self.encode_single(p, &schema, c, &r.returned[0], None, opts.expand.as_deref())
+            .await
     }
 
     pub async fn update_record(
@@ -457,18 +885,150 @@ impl App {
         id: &str,
         json: &[u8],
     ) -> CoreResult<Vec<u8>> {
+        Ok(self
+            .update_record_with(p, coll, id, json, &WriteOpts::default())
+            .await?
+            .json)
+    }
+
+    pub async fn upsert_record_with(
+        &self,
+        p: &Principal,
+        coll: &str,
+        id: &str,
+        json: &[u8],
+        opts: &WriteOpts,
+    ) -> CoreResult<RecordOut> {
         let schema = self.schema();
         let c = schema.get(coll)?;
-        let m = self.update_mutation(p, c, record_id(id)?, json, now_us())?;
-        let r = self.write_one(p, m).await?;
-        Ok(Self::encode_one(c, &r.returned[0], p.superuser))
+        let _ = parse_expand(&schema, c, opts.expand.as_deref(), p.superuser)?;
+        let rid = record_id(id)?;
+        let exists = !self
+            .store
+            .query(Query {
+                sql: format!("SELECT 1 FROM \"{}\" WHERE \"id\" = ?", c.def.name).into(),
+                params: vec![Value::Blob(rid.into())],
+            })
+            .await?
+            .is_empty();
+        if exists {
+            return self.update_record_with(p, coll, id, json, opts).await;
+        }
+        if opts.if_match.is_some() {
+            return Err(CoreError::PreconditionFailed(
+                "cannot use If-Match when creating a new record",
+            ));
+        }
+        let m = self.create_mutation_with_id(p, c, json, Some(rid), now_us())?;
+        let r = self.write_one(p, m, opts.dry_run).await?;
+        let mut out = self
+            .encode_single(p, &schema, c, &r.returned[0], None, opts.expand.as_deref())
+            .await?;
+        out.created = true;
+        Ok(out)
+    }
+
+    pub async fn delete_record_with(
+        &self,
+        p: &Principal,
+        coll: &str,
+        id: &str,
+        opts: &WriteOpts,
+    ) -> CoreResult<()> {
+        let schema = self.schema();
+        let c = schema.get(coll)?;
+        let rid = record_id(id)?;
+        let (m, rule_binds) = self.delete_mutation_with(p, c, rid, opts.if_match, now_us())?;
+        match self.write_one(p, m, opts.dry_run).await {
+            Ok(_) => Ok(()),
+            Err(CoreError::NotFound(_)) if opts.if_match.is_some() => Err(self
+                .check_if_match_miss(p, c, rid, &c.rules.delete, rule_binds)
+                .await),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn delete_record(&self, p: &Principal, coll: &str, id: &str) -> CoreResult<()> {
+        self.delete_record_with(p, coll, id, &WriteOpts::default())
+            .await
+    }
+
+    pub async fn count_records(
+        &self,
+        p: &Principal,
+        coll: &str,
+        filter: &str,
+        mode: TotalMode,
+    ) -> CoreResult<(u64, bool)> {
         let schema = self.schema();
         let c = schema.get(coll)?;
-        let m = self.delete_mutation(p, c, record_id(id)?, now_us())?;
-        self.write_one(p, m).await.map(drop)
+        let su = p.superuser;
+        let rule_sql = if su {
+            "1".to_owned()
+        } else {
+            c.rules
+                .list
+                .as_ref()
+                .ok_or(CoreError::Forbidden(
+                    "only superusers can list this collection",
+                ))?
+                .sql
+                .clone()
+        };
+        let compiled_filter = if filter.trim().is_empty() {
+            None
+        } else {
+            Some(compile(
+                &*schema,
+                &c.def.name,
+                filter,
+                if su { Mode::Rule } else { Mode::Filter },
+            )?)
+        };
+        let unfiltered = compiled_filter.is_none()
+            && (su
+                || c.rules
+                    .list
+                    .as_ref()
+                    .is_some_and(|r| r.class == Class::Const && r.sql == "1"));
+        if mode == TotalMode::Estimate
+            && unfiltered
+            && let Ok(rows) = self
+                .store
+                .query(Query {
+                    sql: "SELECT CAST(substr(stat, 1, instr(stat || ' ', ' ') - 1) AS INTEGER) FROM sqlite_stat1 WHERE tbl = ? LIMIT 1".into(),
+                    params: vec![Value::Text(c.def.name.clone().into())],
+                })
+                .await
+            && let Some(Value::Int(est)) = rows.first().and_then(|r| r.first())
+        {
+            return Ok((*est as u64, false));
+        }
+        let ctx = p.ctx(None, now_us());
+        let mut params = Vec::new();
+        if !su && let Some(r) = &c.rules.list {
+            params.extend(r.bind(&ctx));
+        }
+        if let Some(f) = &compiled_filter {
+            params.extend(f.bind(&ctx));
+        }
+        let sql = format!(
+            "SELECT count(*) FROM \"{}\" AS t WHERE ({rule_sql}) AND ({})",
+            c.def.name,
+            compiled_filter.as_ref().map_or("1", |f| f.sql.as_str())
+        );
+        let rows = self
+            .store
+            .query(Query {
+                sql: sql.into(),
+                params,
+            })
+            .await?;
+        let n = match rows.first().and_then(|r| r.first()) {
+            Some(Value::Int(i)) => *i as u64,
+            _ => 0,
+        };
+        Ok((n, true))
     }
 
     fn list_plan(
@@ -519,22 +1079,8 @@ impl App {
                 "limit must be within 1..={MAX_LIMIT}"
             )));
         }
-        let only = match &lp.fields {
-            None => None,
-            Some(f) => Some(
-                f.split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(|name| {
-                        c.slot(name)
-                            .filter(|&s| c.field_at(s).is_none_or(|f| su || !f.hidden))
-                            .ok_or_else(|| {
-                                CoreError::BadRequest(format!("unknown field '{name}' in fields"))
-                            })
-                    })
-                    .collect::<CoreResult<Vec<_>>>()?,
-            ),
-        };
+        let only = parse_fields(c, lp.fields.as_deref(), su)?;
+        let expand_nodes = parse_expand(&schema, c, lp.expand.as_deref(), su)?;
         let base = self.list_plan(&schema, c, lp, None, su)?;
         let hash = list::shape_hash(&[coll, &lp.filter, &lp.sort, if su { "su" } else { "" }]);
         let (plan, cursor) = match &lp.cursor {
@@ -569,13 +1115,34 @@ impl App {
         let more = rows.len() > limit;
         rows.truncate(limit);
 
+        let exp_maps = if expand_nodes.is_empty() || rows.is_empty() {
+            Vec::new()
+        } else {
+            self.resolve_expand(p, &rows, &expand_nodes, now).await?
+        };
+        let total = match lp.total {
+            TotalMode::None => None,
+            mode => Some(self.count_records(p, coll, &lp.filter, mode).await?.0),
+        };
+
         let mut out = Vec::with_capacity(64 + rows.len() * 256);
         out.extend_from_slice(b"{\"items\":[");
         for (i, row) in rows.iter().enumerate() {
             if i > 0 {
                 out.push(b',');
             }
-            codec::write_record(&mut out, c, row, su, only.as_deref());
+            let row_exp: Vec<(&str, &[u8])> = expand_nodes
+                .iter()
+                .zip(&exp_maps)
+                .filter_map(|(n, map)| match row.get(n.slot) {
+                    Some(Value::Blob(b)) => <&Id>::try_from(&b[..])
+                        .ok()
+                        .and_then(|id| map.get(id))
+                        .map(|bytes| (n.field.as_str(), bytes.as_slice())),
+                    _ => None,
+                })
+                .collect();
+            codec::write_record_ext(&mut out, c, row, su, only.as_deref(), &row_exp);
         }
         out.extend_from_slice(b"],\"next\":");
         match rows.last().filter(|_| more) {
@@ -585,12 +1152,21 @@ impl App {
             }
             None => out.extend_from_slice(b"null"),
         }
+        if let Some(t) = total {
+            use std::io::Write;
+            let _ = write!(out, ",\"total\":{t}");
+        }
         out.push(b'}');
         Ok(out)
     }
 
     /// All items commit atomically or none do.
-    pub async fn batch(&self, p: &Principal, items: &[BatchItem<'_>]) -> CoreResult<Vec<Id>> {
+    pub async fn batch_with(
+        &self,
+        p: &Principal,
+        items: &[BatchItem<'_>],
+        dry_run: bool,
+    ) -> CoreResult<Vec<Id>> {
         if items.is_empty() || items.len() > MAX_BATCH {
             return Err(CoreError::BadRequest(format!(
                 "a batch holds 1..={MAX_BATCH} operations"
@@ -629,19 +1205,26 @@ impl App {
             );
         }
         let ids = mutations.iter().map(|m| m.rid).collect();
-        self.store
-            .write(WriteOp {
-                actor: p.actor(),
-                mutations,
-            })
-            .await
-            .map_err(|e| match e {
-                StoreError::NotFound => {
-                    CoreError::NotFound("batch target (missing, or rejected by a rule)")
-                }
-                e => e.into(),
-            })?;
+        let op = WriteOp {
+            actor: p.actor(),
+            mutations,
+        };
+        let res = if dry_run {
+            self.store.write_dry_run(op).await
+        } else {
+            self.store.write(op).await
+        };
+        res.map_err(|e| match e {
+            StoreError::NotFound => {
+                CoreError::NotFound("batch target (missing, or rejected by a rule)")
+            }
+            e => e.into(),
+        })?;
         Ok(ids)
+    }
+
+    pub async fn batch(&self, p: &Principal, items: &[BatchItem<'_>]) -> CoreResult<Vec<Id>> {
+        self.batch_with(p, items, false).await
     }
 }
 

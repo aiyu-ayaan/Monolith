@@ -19,6 +19,7 @@ struct Res {
     status: StatusCode,
     ctype: String,
     rid: String,
+    etag: String,
     body: Value,
 }
 
@@ -56,7 +57,11 @@ impl T {
                 .map(|v| v.to_str().unwrap().to_owned())
                 .unwrap_or_default()
         };
-        let (ctype, rid) = (header("content-type"), header("x-request-id"));
+        let (ctype, rid, etag) = (
+            header("content-type"),
+            header("x-request-id"),
+            header("etag"),
+        );
         let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
         let body = if bytes.is_empty() {
             Value::Null
@@ -67,6 +72,7 @@ impl T {
             status,
             ctype,
             rid,
+            etag,
             body,
         }
     }
@@ -367,4 +373,198 @@ async fn admin_ui_route() {
         );
         assert_eq!(res.headers()["cache-control"], "no-cache");
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rest_followups_and_debug_surface() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"shop"})),
+        true,
+    )
+    .await;
+    t.call(
+        Method::POST,
+        "/api/v1/apps/shop/collections",
+        Some(json!({
+            "name":"users",
+            "fields":[{"name":"name","type":"text","required":true}],
+            "rules":{"list":"","view":""}
+        })),
+        true,
+    )
+    .await;
+    t.call(
+        Method::POST,
+        "/api/v1/apps/shop/collections",
+        Some(json!({
+            "name":"orders",
+            "fields":[
+                {"name":"item","type":"text","required":true},
+                {"name":"buyer","type":"relation","collection":"users"}
+            ],
+            "rules":{"list":"","view":"","create":"","update":"item != 'locked'","delete":""}
+        })),
+        true,
+    )
+    .await;
+
+    let u = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/shop/collections/users/records",
+            Some(json!({"name":"ada"})),
+            true,
+        )
+        .await;
+    let uid = u.body["id"].as_str().unwrap().to_owned();
+
+    // PUT upsert creates (201) then updates (200) with ETag / If-Match / expand.
+    let oid = monolith_store::id::encode_string(&monolith_store::id::new_id());
+    let orders = "/api/v1/apps/shop/collections/orders/records";
+    let r = t
+        .call(
+            Method::PUT,
+            &format!("{orders}/{oid}?expand=buyer"),
+            Some(json!({"item":"book","buyer":uid})),
+            false,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    assert_eq!(r.body["expand"]["buyer"]["name"], "ada");
+    assert!(!r.etag.is_empty());
+    let etag1 = r.etag.clone();
+
+    // If-None-Match -> 304 Not Modified.
+    let req304 = Request::get(format!("{orders}/{oid}"))
+        .header("if-none-match", &etag1)
+        .body(Body::empty())
+        .unwrap();
+    let r304 = t.raw(req304).await;
+    assert_eq!(r304.status, StatusCode::NOT_MODIFIED);
+    assert_eq!(r304.etag, etag1);
+
+    // If-Match mismatch -> 412 Precondition Failed.
+    let req412 = Request::patch(format!("{orders}/{oid}"))
+        .header("content-type", "application/json")
+        .header("if-match", "\"99999\"")
+        .header("x-request-id", "stale-check-1")
+        .body(Body::from(r#"{"item":"pen"}"#))
+        .unwrap();
+    let r412 = t.raw(req412).await;
+    assert_eq!(r412.status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(
+        r412.body["type"],
+        "https://monolith.dev/errors/precondition-failed"
+    );
+
+    // Dry-run write returns 200 without modifying the record.
+    let r_dry = t
+        .call(
+            Method::PATCH,
+            &format!("{orders}/{oid}?dry_run=true"),
+            Some(json!({"item":"ghost"})),
+            false,
+        )
+        .await;
+    assert_eq!(
+        (r_dry.status, r_dry.body["item"].as_str()),
+        (StatusCode::OK, Some("ghost"))
+    );
+    let r_view = t
+        .call(Method::GET, &format!("{orders}/{oid}"), None, false)
+        .await;
+    assert_eq!(r_view.body["item"], "book");
+
+    // Count endpoint and list with total=exact & expand.
+    let r_cnt = t
+        .call(Method::GET, &format!("{orders}:count"), None, false)
+        .await;
+    assert_eq!(
+        (r_cnt.status, r_cnt.body["total"].as_i64()),
+        (StatusCode::OK, Some(1))
+    );
+    let r_list = t
+        .call(
+            Method::GET,
+            &format!("{orders}?total=exact&expand=buyer"),
+            None,
+            false,
+        )
+        .await;
+    assert_eq!(r_list.body["total"], 1);
+    assert_eq!(r_list.body["items"][0]["expand"]["buyer"]["name"], "ada");
+
+    // Debug endpoints: collections:diff, rules:explain, query:explain, logs, logs/slow.
+    let r_diff = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/shop/collections:diff",
+            Some(json!({
+                "name":"users",
+                "fields":[
+                    {"name":"name","type":"text","required":true},
+                    {"name":"bio","type":"text"}
+                ]
+            })),
+            true,
+        )
+        .await;
+    assert_eq!(r_diff.status, StatusCode::OK);
+    assert_eq!(
+        r_diff.body["statements"][0],
+        "ALTER TABLE \"users\" ADD COLUMN \"bio\" TEXT"
+    );
+
+    let r_rule = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/shop/rules:explain",
+            Some(json!({
+                "collection":"orders",
+                "op":"update",
+                "record":{"item":"locked"}
+            })),
+            true,
+        )
+        .await;
+    assert_eq!(r_rule.status, StatusCode::OK);
+    assert_eq!(r_rule.body["class"], "rowLocal");
+    assert_eq!(r_rule.body["verdict"], false);
+
+    let r_qplan = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/shop/query:explain",
+            Some(json!({"collection":"orders","filter":"item = 'book'","sort":"-item"})),
+            true,
+        )
+        .await;
+    assert_eq!(r_qplan.status, StatusCode::OK);
+    assert_eq!(r_qplan.body["usesScan"], true);
+
+    let r_logs = t
+        .call(
+            Method::GET,
+            "/api/v1/apps/shop/logs?request_id=stale-check-1",
+            None,
+            true,
+        )
+        .await;
+    assert_eq!(r_logs.status, StatusCode::OK);
+    assert_eq!(r_logs.body["items"][0]["status"], 412);
+    assert!(r_logs.body["items"][0]["error"].is_string());
+
+    let r_slow = t
+        .call(
+            Method::GET,
+            "/api/v1/apps/shop/logs/slow?limit=5",
+            None,
+            true,
+        )
+        .await;
+    assert_eq!(r_slow.status, StatusCode::OK);
+    assert!(!r_slow.body["items"].as_array().unwrap().is_empty());
 }

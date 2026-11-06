@@ -33,6 +33,8 @@ pub enum CoreError {
     #[error("{0}")]
     Conflict(String),
     #[error("{0}")]
+    PreconditionFailed(&'static str),
+    #[error("{0}")]
     TooLarge(String),
     #[error("server busy, retry later")]
     Busy,

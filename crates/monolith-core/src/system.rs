@@ -185,15 +185,19 @@ impl Registry {
         })
     }
 
-    /// The running app, opened on first use.
-    pub async fn app(&self, name: &str) -> CoreResult<Arc<App>> {
-        if let Some(a) = self
-            .apps
+    /// Already-opened app, without touching disk.
+    pub fn loaded_app(&self, name: &str) -> Option<Arc<App>> {
+        self.apps
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .get(name)
-        {
-            return Ok(a.clone());
+            .cloned()
+    }
+
+    /// The running app, opened on first use.
+    pub async fn app(&self, name: &str) -> CoreResult<Arc<App>> {
+        if let Some(a) = self.loaded_app(name) {
+            return Ok(a);
         }
         let _guard = self.open_lock.lock().await;
         if let Some(a) = self

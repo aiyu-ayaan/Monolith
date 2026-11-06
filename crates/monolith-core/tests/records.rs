@@ -1,5 +1,6 @@
 use monolith_core::{
-    BatchItem, BatchKind, CollectionDef, CoreError, ListParams, Principal, Registry,
+    BatchItem, BatchKind, CollectionDef, CoreError, ExplainQueryReq, ExplainRuleReq, ListParams,
+    Principal, ReadOpts, Registry, TotalMode, WriteOpts,
 };
 use monolith_rules::Auth;
 use monolith_store::id::{encode_string, new_id};
@@ -572,4 +573,278 @@ async fn filter_conformance_vectors() {
             "{f}"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn expand_total_count_upsert_if_match_and_dry_run() {
+    let (_dir, reg) = setup().await;
+    let app = reg.app("demo").await.unwrap();
+    // Add a nested relation (teams -> users -> tasks) to test multi-hop expand.
+    app.put_collection(
+        def(json!({
+            "name":"teams",
+            "fields":[{"name":"title","type":"text","required":true},{"name":"secret","type":"text","hidden":true}],
+            "rules":{"list":"","view":"title != 'private'"}
+        })),
+        true,
+    )
+    .await
+    .unwrap();
+    app.put_collection(
+        def(json!({
+            "name":"users",
+            "fields":[
+                {"name":"name","type":"text","required":true},
+                {"name":"team","type":"relation","collection":"teams"}
+            ],
+            "rules":{"list":"","view":""}
+        })),
+        false,
+    )
+    .await
+    .unwrap();
+
+    let team_pub = parse(
+        &app.create_record(&su(), "teams", br#"{"title":"core","secret":"top"}"#)
+            .await
+            .unwrap(),
+    );
+    let team_priv = parse(
+        &app.create_record(&su(), "teams", br#"{"title":"private","secret":"shh"}"#)
+            .await
+            .unwrap(),
+    );
+    let u1 = parse(
+        &app.create_record(
+            &su(),
+            "users",
+            json!({"name":"ann","team":team_pub["id"]})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+    let u2 = parse(
+        &app.create_record(
+            &su(),
+            "users",
+            json!({"name":"bo","team":team_priv["id"]})
+                .to_string()
+                .as_bytes(),
+        )
+        .await
+        .unwrap(),
+    );
+    let u1_raw = monolith_store::id::decode(u1["id"].as_str().unwrap()).unwrap();
+
+    let t1 = app
+        .create_record_with(
+            &anon(),
+            "tasks",
+            json!({"title":"t1","status":"open","owner":u1["id"]})
+                .to_string()
+                .as_bytes(),
+            &WriteOpts {
+                expand: Some("owner.team".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let t1_json = parse(&t1.json);
+    assert_eq!(t1_json["expand"]["owner"]["name"], "ann");
+    assert_eq!(
+        t1_json["expand"]["owner"]["expand"]["team"]["title"],
+        "core"
+    );
+    assert!(
+        t1_json["expand"]["owner"]["expand"]["team"]
+            .get("secret")
+            .is_none(),
+        "hidden fields on expanded targets stay hidden from non-superusers"
+    );
+
+    // Target view rule hides the private team from anonymous callers during expand.
+    let t2 = app
+        .create_record_with(
+            &anon(),
+            "tasks",
+            json!({"title":"t2","status":"open","owner":u2["id"]})
+                .to_string()
+                .as_bytes(),
+            &WriteOpts {
+                expand: Some("owner.team".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let t2_json = parse(&t2.json);
+    assert_eq!(t2_json["expand"]["owner"]["name"], "bo");
+    assert!(t2_json["expand"]["owner"].get("expand").is_none());
+
+    // List with expand + total=exact|estimate, and count_records.
+    let page = parse(
+        &app.list_records(
+            &anon(),
+            "tasks",
+            &ListParams {
+                expand: Some("owner.team".into()),
+                total: TotalMode::Exact,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap(),
+    );
+    assert_eq!(page["total"], 2);
+    assert_eq!(page["items"][0]["expand"]["owner"]["name"], "ann");
+    let (cnt, exact) = app
+        .count_records(&anon(), "tasks", "title = 't1'", TotalMode::Exact)
+        .await
+        .unwrap();
+    assert_eq!((cnt, exact), (1, true));
+
+    // If-None-Match returns not_modified when _v matches.
+    let tid = t1_json["id"].as_str().unwrap();
+    let view_hit = app
+        .view_record_with(
+            &anon(),
+            "tasks",
+            tid,
+            &ReadOpts {
+                if_none_match: Some(t1.version),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(view_hit.not_modified);
+
+    // If-Match optimistic concurrency: stale _v -> PreconditionFailed (412), missing/forbidden -> NotFound (404).
+    let stale = app
+        .update_record_with(
+            &user(u1_raw),
+            "tasks",
+            tid,
+            br#"{"title":"stale"}"#,
+            &WriteOpts {
+                if_match: Some(t1.version + 99),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(matches!(stale, Err(CoreError::PreconditionFailed(_))));
+    let wrong_user = app
+        .update_record_with(
+            &anon(),
+            "tasks",
+            tid,
+            br#"{"title":"stale"}"#,
+            &WriteOpts {
+                if_match: Some(t1.version + 99),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(
+        matches!(wrong_user, Err(CoreError::NotFound(_))),
+        "must not leak existence via 412 when update rule rejects"
+    );
+
+    // Dry-run write validates and returns updated row without committing.
+    let dry = app
+        .update_record_with(
+            &user(u1_raw),
+            "tasks",
+            tid,
+            br#"{"title":"dry"}"#,
+            &WriteOpts {
+                dry_run: true,
+                if_match: Some(t1.version),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(parse(&dry.json)["title"], "dry");
+    assert_eq!(
+        parse(&app.view_record(&anon(), "tasks", tid).await.unwrap())["title"],
+        "t1"
+    );
+
+    // Upsert: creates when new (created=true), updates when existing (created=false).
+    let up_id = encode_string(&new_id());
+    let created = app
+        .upsert_record_with(
+            &anon(),
+            "tasks",
+            &up_id,
+            json!({"title":"up1","owner":u1["id"]})
+                .to_string()
+                .as_bytes(),
+            &WriteOpts::default(),
+        )
+        .await
+        .unwrap();
+    assert!(created.created);
+    let updated = app
+        .upsert_record_with(
+            &user(u1_raw),
+            "tasks",
+            &up_id,
+            br#"{"title":"up2"}"#,
+            &WriteOpts {
+                if_match: Some(created.version),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!updated.created);
+    assert_eq!(parse(&updated.json)["title"], "up2");
+
+    // Debug helpers: diff_collection, explain_rule, explain_query.
+    let diff = app
+        .diff_collection(def(json!({
+            "name":"teams",
+            "fields":[
+                {"name":"title","type":"text","required":true},
+                {"name":"secret","type":"text","hidden":true},
+                {"name":"slug","type":"text"}
+            ]
+        })))
+        .unwrap();
+    assert_eq!(diff, vec!["ALTER TABLE \"teams\" ADD COLUMN \"slug\" TEXT"]);
+
+    let exp = app
+        .explain_rule(ExplainRuleReq {
+            collection: "tasks".into(),
+            op: "update".into(),
+            expr: None,
+            auth: Some(Auth {
+                id: u1_raw,
+                collection: "users".into(),
+                claims: vec![],
+            }),
+            record: Some(json!({"owner": u1["id"]}).to_string().into_bytes()),
+            body: Some(br#"{"title":"allowed"}"#.to_vec()),
+        })
+        .unwrap();
+    assert_eq!(exp.class, "rowLocal");
+    assert_eq!(exp.verdict, Some(true));
+
+    let qplan = app
+        .explain_query(ExplainQueryReq {
+            collection: "tasks".into(),
+            filter: "status = 'open'".into(),
+            sort: "-priority".into(),
+            superuser: false,
+        })
+        .await
+        .unwrap();
+    assert!(!qplan.plan.is_empty());
+    assert!(qplan.uses_scan);
+    assert!(!qplan.suggested_indexes.is_empty());
 }

@@ -100,6 +100,18 @@ pub fn write_record(
     su: bool,
     only: Option<&[usize]>,
 ) {
+    write_record_ext(out, c, row, su, only, &[]);
+}
+
+/// Writes one record object with optional pre-encoded `expand` entries (`(field_name, json_bytes)`).
+pub fn write_record_ext(
+    out: &mut Vec<u8>,
+    c: &Collection,
+    row: &[Value],
+    su: bool,
+    only: Option<&[usize]>,
+    expand: &[(&str, &[u8])],
+) {
     out.push(b'{');
     let mut first = true;
     for (slot, v) in row.iter().enumerate() {
@@ -121,6 +133,21 @@ pub fn write_record(
         };
         write_value(out, kind, v);
     }
+    if !expand.is_empty() {
+        if !first {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"\"expand\":{");
+        for (i, (k, bytes)) in expand.iter().enumerate() {
+            if i > 0 {
+                out.push(b',');
+            }
+            write_str(out, k);
+            out.push(b':');
+            out.extend_from_slice(bytes);
+        }
+        out.push(b'}');
+    }
     out.push(b'}');
 }
 
@@ -130,13 +157,20 @@ pub fn write_record(
 #[derive(Debug, Default)]
 pub struct Body {
     pub id: Option<Id>,
+    pub created: Option<i64>,
+    pub updated: Option<i64>,
     pub values: Vec<Option<Value>>,
 }
 
 impl Body {
-    /// `@request.body` slice for rules: values by slot, NULL where not sent.
+    /// `@request.body` / sample row slice for rules: values by slot, NULL where not sent.
     pub fn rule_slots(&self) -> Vec<Value> {
-        let mut v = vec![Value::Null; FIRST_FIELD_SLOT];
+        let mut v = vec![
+            self.id.map_or(Value::Null, |id| Value::Blob(id.into())),
+            self.created.map_or(Value::Null, Value::Int),
+            self.updated.map_or(Value::Null, Value::Int),
+            Value::Null,
+        ];
         v.extend(self.values.iter().map(|x| x.clone().unwrap_or(Value::Null)));
         v
     }
@@ -145,6 +179,7 @@ impl Body {
 struct BodySeed<'a> {
     c: &'a Collection,
     allow_id: bool,
+    allow_system: bool,
     errors: &'a mut Vec<FieldError>,
 }
 
@@ -166,6 +201,8 @@ impl<'de> Visitor<'de> for BodySeed<'_> {
         let n = self.c.def.fields.len();
         let mut body = Body {
             id: None,
+            created: None,
+            updated: None,
             values: vec![None; n],
         };
         while let Some(key) = map.next_key::<std::borrow::Cow<'de, str>>()? {
@@ -183,6 +220,26 @@ impl<'de> Visitor<'de> for BodySeed<'_> {
                         .errors
                         .push(FieldError::new("id", "type", "expected an id string")),
                 },
+                Some(slot @ (1 | 2)) if self.allow_system => {
+                    match map.next_value_seed(ScalarSeed(FieldType::Date))? {
+                        Ok(Value::Int(us)) => {
+                            if slot == 1 {
+                                body.created = Some(us);
+                            } else {
+                                body.updated = Some(us);
+                            }
+                        }
+                        Ok(Value::Null) => {}
+                        _ => self.errors.push(FieldError::new(
+                            &key,
+                            "type",
+                            "expected an RFC 3339 date",
+                        )),
+                    }
+                }
+                Some(3) if self.allow_system => {
+                    map.next_value::<IgnoredAny>()?;
+                }
                 Some(slot) if slot >= FIRST_FIELD_SLOT => {
                     let f = &self.c.def.fields[slot - FIRST_FIELD_SLOT];
                     let v = if f.kind == FieldType::Json {
@@ -299,6 +356,7 @@ pub fn decode_body(c: &Collection, json: &[u8], create: bool) -> CoreResult<Body
     let body = BodySeed {
         c,
         allow_id: create,
+        allow_system: false,
         errors: &mut errors,
     }
     .deserialize(&mut de)
@@ -309,6 +367,26 @@ pub fn decode_body(c: &Collection, json: &[u8], create: bool) -> CoreResult<Body
     }
     if errors.is_empty() {
         Ok(body)
+    } else {
+        Err(CoreError::Validation(errors))
+    }
+}
+
+/// Decodes a sample record/body for `rules:explain` without requiring fields to be present.
+pub fn decode_sample(c: &Collection, json: &[u8]) -> CoreResult<Vec<Value>> {
+    let mut errors = Vec::new();
+    let mut de = serde_json::Deserializer::from_slice(json);
+    let body = BodySeed {
+        c,
+        allow_id: true,
+        allow_system: true,
+        errors: &mut errors,
+    }
+    .deserialize(&mut de)
+    .and_then(|b| de.end().map(|()| b))
+    .map_err(|e| CoreError::BadRequest(format!("invalid sample JSON: {e}")))?;
+    if errors.is_empty() {
+        Ok(body.rule_slots())
     } else {
         Err(CoreError::Validation(errors))
     }
