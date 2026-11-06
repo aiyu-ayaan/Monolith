@@ -1,0 +1,23 @@
+[package]
+name = "monolith-core"
+description = "Apps, collections, schema migrations and record operations above the AppStore seam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+monolith-store.workspace = true
+monolith-rules.workspace = true
+monolith-auth.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
