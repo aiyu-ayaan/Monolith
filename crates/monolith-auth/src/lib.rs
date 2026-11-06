@@ -31,7 +31,8 @@ fn argon() -> Argon2<'static> {
 
 /// CPU-heavy (tens of ms): call from a blocking pool, never a Tokio worker.
 pub fn hash_password(password: &str) -> Result<String, AuthError> {
-    let salt = SaltString::encode_b64(&random_bytes::<16>()?).map_err(|e| AuthError::Hash(e.to_string()))?;
+    let salt = SaltString::encode_b64(&random_bytes::<16>()?)
+        .map_err(|e| AuthError::Hash(e.to_string()))?;
     argon()
         .hash_password(password.as_bytes(), &salt)
         .map(|h| h.to_string())
@@ -52,7 +53,9 @@ pub struct Claims {
 
 fn hex(b: &[u8]) -> String {
     const H: &[u8; 16] = b"0123456789abcdef";
-    b.iter().flat_map(|x| [H[(x >> 4) as usize] as char, H[(x & 15) as usize] as char]).collect()
+    b.iter()
+        .flat_map(|x| [H[(x >> 4) as usize] as char, H[(x & 15) as usize] as char])
+        .collect()
 }
 
 fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
@@ -73,7 +76,8 @@ fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
 }
 
 fn mac(key: &[u8], body: &str) -> Hmac<Sha256> {
-    let mut m = <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
+    let mut m =
+        <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
     m.update(body.as_bytes());
     m
 }
@@ -117,7 +121,10 @@ mod tests {
     #[test]
     fn token_round_trip_and_tamper() {
         let key = [9u8; 32];
-        let c = Claims { sub: [1; 16], exp_us: 1_000 };
+        let c = Claims {
+            sub: [1; 16],
+            exp_us: 1_000,
+        };
         let t = sign_token(&key, c);
         assert_eq!(verify_token(&key, &t, 999), Some(c));
         assert_eq!(verify_token(&key, &t, 1_000), None, "expired");
