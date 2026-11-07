@@ -133,7 +133,9 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
       `monolith backup` CLI, encryption (B4), a single-file archive that includes the storage, streamed download without buffering in the admin UI
 - [x] Webhooks v1: record events, HMAC signature, retries, delivery log, test ping (`docs/11 §7`); Admin UI Webhooks page
 - [ ] Webhook follow-ups: auth/backup events, per-hook filter, admin UI delivery detail, cron triggers, benchmark
-- [ ] Sidebar items still marked "Soon": Offline sync (`docs/09` part A), Plugins (`docs/14`; needs a WASM runtime)
+- [x] WASM plugins v1: after-commit `on_event` handlers on wasmtime with fuel and memory caps (`docs/14 §6`); Admin UI Plugins page
+- [ ] Plugin follow-ups: before-write hooks, custom routes, cron, `kv`/`http.fetch` host functions, capability manifest, component model, benchmark call overhead
+- [ ] Sidebar items still marked "Soon": Offline sync (`docs/09` part A)
 - [ ] Rules follow-ups: `:length` and `:each` modifiers, `~` with a field on the right side, `@request.query.*`, `@request.key.*`
 - [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md,
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB

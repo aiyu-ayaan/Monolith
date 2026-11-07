@@ -493,6 +493,17 @@ pub fn router(reg: Arc<Registry>) -> Router {
             post(retry_delivery),
         )
         .route(
+            "/api/v1/apps/{app}/plugins",
+            get(list_plugins)
+                .post(create_plugin)
+                .layer(DefaultBodyLimit::max(monolith_core::plugins::MAX_WASM)),
+        )
+        .route(
+            "/api/v1/apps/{app}/plugins/{id}",
+            axum::routing::delete(delete_plugin).put(update_plugin),
+        )
+        .route("/api/v1/apps/{app}/plugins/{id}/logs", get(plugin_logs))
+        .route(
             "/api/v1/apps/{app}/buckets",
             get(list_buckets).post(create_bucket),
         )
@@ -1934,6 +1945,74 @@ async fn retry_delivery(
     require_su(&reg, &headers)?;
     reg.retry_delivery(&app, &id, &did).await?;
     Ok(StatusCode::ACCEPTED.into_response())
+}
+
+// ---------- plugins (doc 14) ----------
+
+async fn list_plugins(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(json!({"items": reg.list_plugins(&app).await?})).into_response())
+}
+
+/// The body is the raw `.wasm` module; name, events, enabled and fuel are query parameters.
+async fn create_plugin(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+    body: Bytes,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let edit = monolith_core::PluginEdit {
+        name: q.get("name").cloned().unwrap_or_default(),
+        events: q
+            .get("events")
+            .map(|e| {
+                e.split(',')
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        enabled: q.get("enabled").is_none_or(|v| v != "false"),
+        fuel: q.get("fuel").and_then(|f| f.parse().ok()),
+    };
+    let info = reg.create_plugin(&app, edit, body.to_vec()).await?;
+    Ok((StatusCode::CREATED, axum::Json(info)).into_response())
+}
+
+async fn update_plugin(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let edit: monolith_core::PluginEdit = parse_json(body)?;
+    Ok(axum::Json(reg.update_plugin(&app, &id, edit).await?).into_response())
+}
+
+async fn delete_plugin(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    reg.delete_plugin(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn plugin_logs(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(json!({"items": reg.plugin_logs(&app, &id).await?})).into_response())
 }
 
 // ---------- admin UI (doc 15 §4) ----------

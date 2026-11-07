@@ -11,6 +11,7 @@ pub mod error;
 pub mod files;
 pub mod list;
 pub mod metrics;
+pub mod plugins;
 pub mod realtime;
 pub mod schema;
 pub mod storage_cfg;
@@ -30,6 +31,7 @@ pub use files::{Backend, Blob, BucketIn, BucketInfo, Files, ObjectInfo, ObjectPa
 pub use metrics::{Metrics, ReqKind};
 pub use monolith_rules::Auth;
 pub use monolith_store::Value;
+pub use plugins::{PluginEdit, PluginInfo};
 pub use schema::{Collection, CollectionDef, Schema};
 pub use storage_cfg::{StorageConfigIn, StorageConfigView};
 pub use system::{AppInfo, Registry, SuperuserInfo};

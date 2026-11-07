@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS wh_deliveries_due ON webhook_deliveries (status, next_at);
 CREATE INDEX IF NOT EXISTS wh_deliveries_hook ON webhook_deliveries (hook, created);
+CREATE TABLE IF NOT EXISTS plugins (
+  id BLOB PRIMARY KEY, app TEXT NOT NULL, name TEXT NOT NULL, wasm BLOB NOT NULL,
+  events TEXT NOT NULL, enabled INTEGER NOT NULL, fuel INTEGER NOT NULL, created INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS plugins_app ON plugins (app, created);
 ";
 
 /// A console administrator (row of `superusers`, without the hash).
@@ -387,6 +392,7 @@ impl Registry {
         }
         self.drop_api_keys(name).await?;
         self.drop_webhooks(name).await?;
+        self.drop_plugins(name).await?;
         self.files
             .write()
             .unwrap_or_else(|e| e.into_inner())

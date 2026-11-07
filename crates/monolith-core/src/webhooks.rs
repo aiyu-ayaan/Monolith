@@ -22,6 +22,7 @@ use tokio::sync::Notify;
 use crate::app::{App, now_us, row_multi};
 use crate::codec::{self, format_us};
 use crate::error::{CoreError, CoreResult, FieldError};
+use crate::plugins::{self, PluginRt};
 use crate::schema::valid_name;
 use crate::system::{Registry, sys_delete, sys_write};
 
@@ -86,9 +87,15 @@ pub struct DeliveryInfo {
 
 /// `collection` / `op` of one event pattern; `None` matches anything.
 #[derive(Debug, Clone)]
-struct Pattern {
+pub(crate) struct Pattern {
     coll: Option<String>,
     op: Option<&'static str>,
+}
+
+impl Pattern {
+    pub(crate) fn matches(&self, coll: &str, op: &str) -> bool {
+        self.coll.as_deref().is_none_or(|c| c == coll) && self.op.is_none_or(|o| o == op)
+    }
 }
 
 #[derive(Debug)]
@@ -113,7 +120,7 @@ fn op_name(op: Op) -> &'static str {
     }
 }
 
-fn parse_pattern(s: &str) -> Option<Pattern> {
+pub(crate) fn parse_pattern(s: &str) -> Option<Pattern> {
     if s == "*" {
         return Some(Pattern {
             coll: None,
@@ -180,28 +187,28 @@ fn validate(input: &WebhookIn) -> CoreResult<()> {
     Ok(())
 }
 
-fn text(v: &Value) -> &str {
+pub(crate) fn text(v: &Value) -> &str {
     match v {
         Value::Text(t) => t,
         _ => "",
     }
 }
 
-fn int(v: &Value) -> i64 {
+pub(crate) fn int(v: &Value) -> i64 {
     match v {
         Value::Int(n) => *n,
         _ => 0,
     }
 }
 
-fn id_of(v: &Value) -> Option<Id> {
+pub(crate) fn id_of(v: &Value) -> Option<Id> {
     match v {
         Value::Blob(b) => <Id>::try_from(&b[..]).ok(),
         _ => None,
     }
 }
 
-fn patterns_of(events_json: &str) -> Vec<Pattern> {
+pub(crate) fn patterns_of(events_json: &str) -> Vec<Pattern> {
     serde_json::from_str::<Vec<String>>(events_json)
         .unwrap_or_default()
         .iter()
@@ -209,9 +216,21 @@ fn patterns_of(events_json: &str) -> Vec<Pattern> {
         .collect()
 }
 
+type Wanted<'a> = (
+    &'a Change,
+    &'a crate::schema::Collection,
+    String,
+    Vec<Id>,
+    Vec<Arc<PluginRt>>,
+);
+
 /// Shared state: the per-app hook cache, change cursors and the delivery worker's wake-up.
 pub(crate) struct WhHub {
     sys: Arc<SqliteStore>,
+    plugins: RwLock<HashMap<String, Arc<Vec<Arc<PluginRt>>>>>,
+    engine: wasmtime::Engine,
+    /// Bounds concurrent plugin calls.
+    exec: Arc<tokio::sync::Semaphore>,
     hooks: RwLock<HashMap<String, Arc<Vec<Hook>>>>,
     /// Last change seq turned into deliveries, per open app.
     cursors: Mutex<HashMap<String, u64>>,
@@ -229,6 +248,11 @@ impl WhHub {
             .map_err(|e| CoreError::Internal(e.to_string()))?;
         let hub = Arc::new(WhHub {
             sys,
+            plugins: RwLock::new(HashMap::new()),
+            engine: plugins::engine()?,
+            exec: Arc::new(tokio::sync::Semaphore::new(
+                (std::thread::available_parallelism().map_or(2, |n| n.get()) / 2).max(1),
+            )),
             hooks: RwLock::new(HashMap::new()),
             cursors: Mutex::new(HashMap::new()),
             notify: Arc::new(Notify::new()),
@@ -253,8 +277,107 @@ impl WhHub {
         }
         *hub.hooks.write().unwrap_or_else(|e| e.into_inner()) =
             map.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
+        hub.load_plugins().await?;
         tokio::spawn(worker(Arc::downgrade(&hub), hub.notify.clone()));
         Ok(hub)
+    }
+
+    pub(crate) fn engine(&self) -> &wasmtime::Engine {
+        &self.engine
+    }
+
+    fn plugins_of(&self, app: &str) -> Arc<Vec<Arc<PluginRt>>> {
+        self.plugins
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(app)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn plugin(&self, id: &Id) -> Option<Arc<PluginRt>> {
+        self.plugins
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .flat_map(|v| v.iter())
+            .find(|p| p.id == *id)
+            .cloned()
+    }
+
+    /// Something (a webhook or a plugin) wants this app's changes.
+    fn active(&self, app: &str) -> bool {
+        !self.hooks_of(app).is_empty() || !self.plugins_of(app).is_empty()
+    }
+
+    fn compile_enabled(&self, rows: &[Vec<Value>]) -> HashMap<String, Vec<Arc<PluginRt>>> {
+        let mut map: HashMap<String, Vec<Arc<PluginRt>>> = HashMap::new();
+        for r in rows {
+            let (Some(id), Value::Blob(wasm)) = (id_of(&r[0]), &r[5]) else {
+                continue;
+            };
+            match plugins::build_rt(
+                &self.engine,
+                id,
+                text(&r[2]),
+                text(&r[3]),
+                int(&r[4]) as u64,
+                wasm,
+            ) {
+                Ok(rt) => map.entry(text(&r[1]).to_owned()).or_default().push(rt),
+                Err(e) => tracing::warn!(plugin = text(&r[2]), error = %e, "plugin skipped"),
+            }
+        }
+        map
+    }
+
+    const PLUGIN_SQL: &'static str =
+        "SELECT id, app, name, events, fuel, wasm FROM plugins WHERE enabled = 1";
+
+    async fn load_plugins(&self) -> CoreResult<()> {
+        let rows = self
+            .sys
+            .query(Query {
+                sql: format!("{} ORDER BY created", Self::PLUGIN_SQL).into(),
+                params: vec![],
+            })
+            .await?;
+        let map = self.compile_enabled(&rows);
+        *self.plugins.write().unwrap_or_else(|e| e.into_inner()) =
+            map.into_iter().map(|(k, v)| (k, Arc::new(v))).collect();
+        Ok(())
+    }
+
+    /// Recompiles the enabled plugins of `app` (counters of unchanged ones restart).
+    pub(crate) async fn reload_plugins(&self, app: &str) -> CoreResult<()> {
+        let rows = self
+            .sys
+            .query(Query {
+                sql: format!("{} AND app = ? ORDER BY created", Self::PLUGIN_SQL).into(),
+                params: vec![Value::Text(app.into())],
+            })
+            .await?;
+        let list = self.compile_enabled(&rows).remove(app).unwrap_or_default();
+        let was_idle = !self.active(app);
+        let cursor = self
+            .cursors
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(app)
+            .copied();
+        if was_idle
+            && !list.is_empty()
+            && let Some(c) = cursor
+        {
+            self.save_cursor(app, c).await?;
+        }
+        let mut g = self.plugins.write().unwrap_or_else(|e| e.into_inner());
+        if list.is_empty() {
+            g.remove(app);
+        } else {
+            g.insert(app.to_owned(), Arc::new(list));
+        }
+        Ok(())
     }
 
     fn hooks_of(&self, app: &str) -> Arc<Vec<Hook>> {
@@ -286,7 +409,7 @@ impl WhHub {
                 })
             })
             .collect();
-        let was_empty = self.hooks_of(app).is_empty();
+        let was_empty = !self.active(app);
         let cursor = self
             .cursors
             .lock()
@@ -324,7 +447,7 @@ impl WhHub {
 
     /// Where the dispatcher of `app` resumes: its saved cursor when hooks exist, else now.
     async fn start_cursor(&self, app: &Arc<App>) -> u64 {
-        if !self.hooks_of(&app.name).is_empty()
+        if self.active(&app.name)
             && let Ok(rows) = self
                 .sys
                 .query(Query {
@@ -355,15 +478,16 @@ impl WhHub {
     /// Turns `changes` into delivery rows (and moves the persisted cursor) in one write.
     async fn enqueue(&self, app: &Arc<App>, changes: &[Change]) -> CoreResult<()> {
         let hooks = self.hooks_of(&app.name);
+        let plugs = self.plugins_of(&app.name);
         let last = changes.last().map_or(0, |c| c.seq);
-        if hooks.is_empty() {
+        if hooks.is_empty() && plugs.is_empty() {
             return Ok(());
         }
         let schema = app.schema();
         let by_cid: HashMap<u32, &crate::schema::Collection> =
             schema.collections.values().map(|c| (c.cid, &**c)).collect();
         // Changes some hook wants, with the hooks that want them.
-        let mut wanted: Vec<(&Change, &crate::schema::Collection, String, Vec<Id>)> = Vec::new();
+        let mut wanted: Vec<Wanted> = Vec::new();
         for ch in changes {
             let Some(c) = by_cid.get(&ch.coll) else {
                 continue;
@@ -374,8 +498,13 @@ impl WhHub {
                 .filter(|h| h.matches(&c.def.name, op))
                 .map(|h| h.id)
                 .collect();
-            if !ids.is_empty() {
-                wanted.push((ch, c, format!("{}.{op}", c.def.name), ids));
+            let who: Vec<Arc<PluginRt>> = plugs
+                .iter()
+                .filter(|p| p.matches(&c.def.name, op))
+                .cloned()
+                .collect();
+            if !ids.is_empty() || !who.is_empty() {
+                wanted.push((ch, c, format!("{}.{op}", c.def.name), ids, who));
             }
         }
         let mut writes = Vec::new();
@@ -404,7 +533,7 @@ impl WhHub {
                 .iter()
                 .filter_map(|r| id_of(r.first()?).map(|id| (id, r)))
                 .collect();
-            for (ch, _, event, hook_ids) in items {
+            for (ch, _, event, hook_ids, who) in items {
                 let mut rec = Vec::with_capacity(256);
                 match by_id.get(&ch.rid) {
                     Some(row) => {
@@ -417,6 +546,18 @@ impl WhHub {
                         rec.extend_from_slice(&monolith_store::id::encode(&ch.rid));
                         rec.extend_from_slice(b"\"}");
                     }
+                }
+                for p in who {
+                    let payload = envelope(
+                        &encode_string(&new_id()),
+                        &app.name,
+                        event,
+                        &c.def.name,
+                        ch.seq,
+                        ch.ts,
+                        &rec,
+                    );
+                    p.invoke(&self.engine, &self.exec, payload).await;
                 }
                 for hook in hook_ids {
                     let did = new_id();
