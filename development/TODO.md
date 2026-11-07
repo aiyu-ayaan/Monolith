@@ -125,8 +125,9 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
       backends, encrypt the stored secret, bucket-lifecycle docs, remote-aware backups (versioning / copy)
 - [ ] Storage follow-ups: rule-based/per-user access, file fields on records, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
+- [x] Realtime v2: filtered and per-record topics, `snapshot`, `since` replay, `leave` events (`docs/07 §9`)
 - [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
-      `since` replay from `_changes`; WebSocket + channels; filtered and per-record topics; `fields`/`expand`; `leave` events;
+      WebSocket + channels; `fields`/`expand`; per-conn `seen` beyond 50 000;
       relational view rules via the batched SQL check (`docs/07 §5`); benchmark S7; micro-benchmarks for the hub (`CLAUDE.md`: realtime needs them)
 - [ ] Backups follow-ups: schedule + retention (`docs/09` B2), zstd archive, S3 target, WAL shipping, in-place restore,
       `monolith backup` CLI, encryption (B4), a single-file archive that includes the storage, streamed download without buffering in the admin UI

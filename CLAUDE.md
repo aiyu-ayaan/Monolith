@@ -8,6 +8,16 @@ serves many apps. Inspired by PocketBase and Firebase.
 The design docs in `development/docs/` are the source of truth. Read
 `development/docs/README.md` first, then `development/TODO.md` for where work stands.
 
+## CodeGraph: always use it first
+
+This repo is indexed (`.codegraph/`). Before grep, find, or reading files to locate or understand
+code, call `codegraph_explore` (MCP) or `codegraph explore "<symbols or question>"` (shell). Put
+the symbols you plan to edit in the query: it returns their current line-numbered source, call
+paths, and blast radius in one call. Treat that source as already read. Fall back to Read/Grep
+only for non-code files (docs, configs) or a detail the graph did not return. Do not delegate
+code lookups to a sub-agent that re-reads files. Keep the index fresh: after large changes run
+`codegraph sync` if the watcher lags.
+
 ## Prime directive: performance first
 
 Every change is judged first by latency, throughput, and memory, then by features.

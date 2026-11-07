@@ -27,10 +27,13 @@ curl -N -H "Authorization: Bearer $MONOLITH_KEY" \
   "$BASE/api/v1/apps/$APP/realtime?collections=posts,comments"
 ```
 
-- SSE only, whole-collection topics only. Events: `hello` (`{conn, hb}`), `record` (`{op: create|update|delete, collection, seq, record}`,
-  SSE `id` = `seq`), `resync`, and `: hb` comments every 25 s. Not yet: WebSocket, channels, filters, `fields`/`expand`, `leave`, `since`.
+- SSE only. Query: `collections=a,b`, per collection `filter.<c>=<expr>` and `ids.<c>=<id>,<id>` (one topic per collection per
+  connection), `sort.<c>`, `snapshot=<n>` (current result first), `since=<seq>` or `Last-Event-ID` (replay). Events: `hello`
+  (`{conn, hb}`), `snapshot` (`{collection, seq, items, next}`), `record` (`{op: create|update|delete|leave, collection, seq, record}`,
+  SSE `id` = `seq`), `resync`, `error`, and `: hb` comments every 25 s. Not yet: WebSocket, channels, `fields`/`expand`.
+- `leave` and filtered deletes work only for records the connection was shown (snapshot or earlier event; 50 000 tracked per topic).
 - In a browser use `fetch` streaming (needs the `Authorization` header), not `EventSource`.
-- No `since` replay: after a reconnect or `resync`, refetch the collection.
+- After a reconnect send `since=<last seq>`; on `resync` refetch (or reopen with `snapshot`). Replay is capped at 20 000 changes.
 - An event holds the row as it is when dispatched, so quick writes to one row can arrive as one event.
 - Superusers see all rows and hidden fields. Others need a non-relational view rule (`null` = 403, relational = 400) and only
   receive rows it allows; they get `delete` only when the view rule is public.

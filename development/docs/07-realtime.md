@@ -132,15 +132,23 @@ on ChangeEvent(ev):
 
 ## 9. Implemented today (Phase 2 slice, `crates/monolith-core/src/realtime.rs`)
 
-- Transport SSE only: `GET /api/v1/apps/{app}/realtime?collections=a,b` (events `hello`, `record`, `resync`, `: hb`).
-- Topics are whole collections. No per-record or filtered topics, channels, WebSocket or `since` replay yet:
-  a reconnecting client refetches.
+- Transport SSE only: `GET /api/v1/apps/{app}/realtime?collections=a,b` (events `hello`, `snapshot`, `record`, `resync`, `error`, `: hb`).
+- Topics: a whole collection, narrowed per collection by `filter.<coll>=<expr>` (doc 06 syntax, non-relational) and/or
+  `ids.<coll>=<id>,<id>`. A narrowed topic keeps a bounded `seen` set (50 000 ids) so it can send `op:"leave"`
+  when a record stops matching and deliver deletes of records it showed. One topic per collection per connection;
+  open another connection for another filter.
+- `snapshot=<n>` (≤ 1000) sends the current result set first as `event: snapshot` (`{collection, seq, items, next}`, list rule,
+  `sort.<coll>`), seeds `seen`, then live events. `since=<seq>` or `Last-Event-ID` replays missed changes from `_changes`
+  (current row state, ≤ 20 000 changes, else `resync` with `reason:"since"`). A snapshot wins over `since`. Live events that
+  arrive during priming wait behind a per-connection gate and are flushed in order, dropping seq ≤ the primed seq.
+- Not done: channels, WebSocket, `fields`/`expand` on events.
 - One hub task per app tails the change bus. Per batch and collection it fetches the changed rows in
   one statement (bucketed `IN` sizes of 1/8/64/512 so statements cache), encodes each event once per
   audience (superuser, everyone else) and pushes the shared `Arc<str>` into a bounded per-connection
   queue (256). A full queue drops that connection; bus lag broadcasts `resync`.
 - **Deviation from §5:** the change event does not carry the row yet, so an event holds the row as it is
   at dispatch time (rapid writes coalesce) and a delete has no pre-delete row. Non-superusers therefore
-  get `delete` only when the view rule is public. Fix: capture the old/new row in the writer (store crate).
+  get `delete` only when the view rule is public, except narrowed topics, which deliver deletes of records they had shown.
+  Fix: capture the old/new row in the writer (store crate).
 - Non-superusers need a view rule that is not `Relational` (those need the batched SQL check of §5).
 - Limits: 10 000 connections per app, 32 collections per connection. Not benchmarked: scenario S7 (doc 17) is still to run.

@@ -1251,7 +1251,32 @@ async fn realtime(
     for n in &names {
         c.need("records:read", Some(n))?;
     }
-    let sub = reg.app(&app).await?.subscribe(&c.p, &names)?;
+    let snapshot = q.get("snapshot").and_then(|s| s.parse::<usize>().ok());
+    let specs: Vec<monolith_core::realtime::TopicSpec> = names
+        .iter()
+        .map(|n| monolith_core::realtime::TopicSpec {
+            collection: n.clone(),
+            filter: q.get(&format!("filter.{n}")).cloned().unwrap_or_default(),
+            ids: q
+                .get(&format!("ids.{n}"))
+                .map(|s| {
+                    s.split(',')
+                        .map(str::trim)
+                        .filter(|i| !i.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            sort: q.get(&format!("sort.{n}")).cloned().unwrap_or_default(),
+            snapshot,
+        })
+        .collect();
+    let since = q
+        .get("since")
+        .map(String::as_str)
+        .or_else(|| headers.get("last-event-id").and_then(|v| v.to_str().ok()))
+        .and_then(|s| s.parse::<u64>().ok());
+    let sub = reg.app(&app).await?.subscribe_with(&c.p, &specs, since)?;
     let mut hb = tokio::time::interval(std::time::Duration::from_secs(
         monolith_core::realtime::HEARTBEAT_S,
     ));
