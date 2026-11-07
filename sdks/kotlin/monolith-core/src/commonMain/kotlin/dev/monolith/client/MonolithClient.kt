@@ -1,6 +1,7 @@
 package dev.monolith.client
 
 import dev.monolith.client.analytics.AnalyticsService
+import dev.monolith.client.auth.AppAuth
 import dev.monolith.client.auth.AuthService
 import dev.monolith.client.collections.Collection
 import dev.monolith.client.files.FilesService
@@ -28,6 +29,12 @@ class MonolithClient(val options: ClientOptions) {
     val realtime: RealtimeService = RealtimeService(http)
     val files: FilesService = FilesService(http)
     val analytics: AnalyticsService = AnalyticsService(http)
+
+    /**
+     * Auth for the app's end users (sign up/in, providers, session, refresh). Use `auth("_superusers")`
+     * for the system login.
+     */
+    val auth: AppAuth = AppAuth(http, options.session)
 
     private val authServices = mutableMapOf<String, AuthService>()
     private val collections = mutableMapOf<String, Collection<*>>()

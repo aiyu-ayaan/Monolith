@@ -1,5 +1,6 @@
 package dev.monolith.client
 
+import dev.monolith.client.auth.SessionOptions
 import io.ktor.client.HttpClient
 
 /**
@@ -11,5 +12,6 @@ data class ClientOptions(
     val key: String? = null,
     val token: String? = null,
     val headers: Map<String, String> = emptyMap(),
-    val httpClient: HttpClient? = null
+    val httpClient: HttpClient? = null,
+    val session: SessionOptions = SessionOptions()
 )

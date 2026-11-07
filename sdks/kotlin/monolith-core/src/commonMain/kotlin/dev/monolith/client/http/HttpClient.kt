@@ -18,6 +18,15 @@ import kotlin.math.pow
 import kotlin.random.Random
 
 /**
+ * Hooks that keep a user session fresh: [beforeRequest] runs before every authenticated request,
+ * [onUnauthorized] after a 401 (return true to retry the request once with the new token).
+ */
+interface AuthHooks {
+    suspend fun beforeRequest()
+    suspend fun onUnauthorized(usedToken: String): Boolean
+}
+
+/**
  * Low-level HTTP transport client for Monolith.
  *
  * Implements exponential backoff retries for GET requests, token management,
@@ -42,6 +51,10 @@ class HttpClient(options: ClientOptions) {
     }
 
     private var token: String? = options.token
+
+    /** Installed by the app-user auth facade; null means plain static-token behaviour. */
+    @kotlin.concurrent.Volatile
+    var authHooks: AuthHooks? = null
     private var apiKey: String? = options.key
     private val defaultHeaders: Map<String, String> = options.headers
 
@@ -84,7 +97,9 @@ class HttpClient(options: ClientOptions) {
 
     /**
      * Executes an HTTP request with automatic retries on GET, Bearer auth attachment,
-     * and RFC 9457 error decoding.
+     * and RFC 9457 error decoding. With [anonymous] the user token is not sent (only the API key, if any)
+     * and the session hooks are skipped: use it for sign-in, refresh and other public endpoints.
+     * With a session installed, a 401 triggers one refresh and one retry.
      */
     suspend fun <T> request(
         method: HttpMethod,
@@ -93,7 +108,33 @@ class HttpClient(options: ClientOptions) {
         body: Any? = null,
         headers: Map<String, String>? = null,
         serializer: KSerializer<T>? = null,
-        bodySerializer: KSerializer<*>? = null
+        bodySerializer: KSerializer<*>? = null,
+        anonymous: Boolean = false
+    ): T {
+        val hooks = authHooks
+        if (anonymous || hooks == null) {
+            return execute(method, path, query, body, headers, serializer, bodySerializer, if (anonymous) null else token)
+        }
+        hooks.beforeRequest()
+        val used = token
+        val explicitAuth = headers?.keys?.any { it.equals("Authorization", ignoreCase = true) } == true
+        try {
+            return execute(method, path, query, body, headers, serializer, bodySerializer, used)
+        } catch (e: MonolithException) {
+            if (e.status != 401 || used == null || explicitAuth || !hooks.onUnauthorized(used)) throw e
+        }
+        return execute(method, path, query, body, headers, serializer, bodySerializer, token)
+    }
+
+    private suspend fun <T> execute(
+        method: HttpMethod,
+        path: String,
+        query: Map<String, Any?>?,
+        body: Any?,
+        headers: Map<String, String>?,
+        serializer: KSerializer<T>?,
+        bodySerializer: KSerializer<*>?,
+        userToken: String?
     ): T {
         val url = buildUrl(path, query)
         val isGet = method == HttpMethod.Get
@@ -105,7 +146,7 @@ class HttpClient(options: ClientOptions) {
             mergedHeaders.putAll(headers)
         }
 
-        val authToken = token ?: apiKey
+        val authToken = userToken ?: apiKey
         if (authToken != null && !mergedHeaders.containsKey("Authorization") && !mergedHeaders.containsKey("authorization")) {
             mergedHeaders["Authorization"] = "Bearer $authToken"
         }

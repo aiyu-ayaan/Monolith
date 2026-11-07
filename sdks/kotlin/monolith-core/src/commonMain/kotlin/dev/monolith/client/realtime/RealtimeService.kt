@@ -169,6 +169,7 @@ internal class SseStream(
         while (currentCoroutineContext().isActive) {
             var resync = false
             try {
+                http.authHooks?.beforeRequest()
                 val query = mutableMapOf<String, Any?>().apply { putAll(params()) }
                 if (!snapshot && lastSeq > 0) query["since"] = lastSeq
                 val url = http.buildUrl("/api/v1/apps/${http.app}/realtime", query)
