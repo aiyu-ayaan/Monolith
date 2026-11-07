@@ -920,6 +920,161 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/buckets:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: listBuckets
+      description: Storage buckets with object counts and bytes (superuser).
+      responses:
+        "200":
+          description: Buckets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Bucket" } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createBucket
+      description: Creates a bucket (superuser).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BucketInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Bucket" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/buckets/{bucket}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - $ref: "#/components/parameters/Bucket"
+    get:
+      operationId: getBucket
+      responses:
+        "200":
+          description: Bucket
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Bucket" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: replaceBucket
+      description: Replaces the bucket config. `name` must match the path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BucketInput" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Bucket" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteBucket
+      description: Fails with 409 when the bucket has objects, unless `force=true`, which deletes them too.
+      parameters:
+        - { name: force, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/buckets/{bucket}/objects:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - $ref: "#/components/parameters/Bucket"
+    get:
+      operationId: listObjects
+      description: |
+        Objects ordered by key, keyset paged. Needs a superuser token or a key with `files:read`
+        (also for public buckets: public means readable by key, not listable).
+      parameters:
+        - { name: prefix, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000, default: 100 } }
+        - { name: cursor, in: query, description: "`nextCursor` of the previous page", schema: { type: string } }
+      responses:
+        "200":
+          description: Page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/StorageObject" } }
+                  nextCursor: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/buckets/{bucket}/objects/{key}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - $ref: "#/components/parameters/Bucket"
+      - name: key
+        in: path
+        required: true
+        description: 1 to 512 bytes; may contain `/`; no empty, `.` or `..` segments, control characters or backslashes.
+        schema: { type: string }
+    get:
+      operationId: getObject
+      description: |
+        Streams the object. Anonymous in a public bucket, otherwise a superuser token or a key with
+        `files:read`. Supports `ETag`/`If-None-Match` and a single `Range`. Served with `nosniff` and
+        a sandbox CSP; only images (not SVG), audio, video, PDF and plain text display inline.
+      responses:
+        "200": { description: Content, content: { "*/*": { schema: { type: string, format: binary } } } }
+        "206": { description: Partial content }
+        "304": { description: Not modified }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "416": { description: Range not satisfiable }
+    put:
+      operationId: putObject
+      description: |
+        Uploads the raw request body (not multipart) and replaces any object with that key. Needs a
+        superuser token or a key with `files:write`. `Content-Type` is stored and checked against the
+        bucket's `allowedMime`. The body is streamed; the bucket's `maxSize` is enforced as it arrives.
+      requestBody:
+        required: true
+        content:
+          "*/*": { schema: { type: string, format: binary } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StorageObject" } } } }
+        "200": { description: Replaced, content: { application/json: { schema: { $ref: "#/components/schemas/StorageObject" } } } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteObject
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api/v1/apps/{app}/auth/config:
     parameters:
       - $ref: "#/components/parameters/App"
@@ -969,6 +1124,11 @@ components:
         `/api/v1/apps/{app}/api-keys`) on that app's record and realtime routes. User tokens arrive in Phase 2.
 
   parameters:
+    Bucket:
+      name: bucket
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[a-z][a-z0-9_]{0,62}$" }
     App:
       name: app
       in: path
@@ -1205,6 +1365,39 @@ components:
         name: { type: string, example: b20261107134512123.db }
         bytes: { type: integer }
         created: { type: string, format: date-time }
+
+    BucketInput:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9_]{0,62}$" }
+        public: { type: boolean, default: false }
+        maxSize: { type: integer, minimum: 1, maximum: 10737418240, default: 104857600, description: Bytes per object }
+        allowedMime: { type: array, maxItems: 32, items: { type: string }, description: "e.g. image/png, image/*; empty allows all" }
+
+    Bucket:
+      type: object
+      required: [name, public, maxSize, allowedMime, created, objects, bytes]
+      properties:
+        name: { type: string }
+        public: { type: boolean }
+        maxSize: { type: integer }
+        allowedMime: { type: array, items: { type: string } }
+        created: { type: string, format: date-time }
+        objects: { type: integer }
+        bytes: { type: integer }
+
+    StorageObject:
+      type: object
+      required: [key, size, mime, etag, created, updated]
+      properties:
+        key: { type: string }
+        size: { type: integer }
+        mime: { type: string }
+        etag: { type: string, description: SHA-256 of the content, hex }
+        created: { type: string, format: date-time }
+        updated: { type: string, format: date-time }
 
     ApiKey:
       type: object

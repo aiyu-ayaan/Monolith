@@ -279,6 +279,17 @@ impl Caller {
     }
 }
 
+impl Caller {
+    /// Like [`Caller::need`] but anonymous callers fail with 401: used by storage, which has no rules yet.
+    fn require(&self, perm: &str, target: &str) -> ApiResult<()> {
+        match &self.key {
+            Some(_) => self.need(perm, Some(target)),
+            None if self.p.superuser => Ok(()),
+            None => Err(ApiError(CoreError::Unauthorized)),
+        }
+    }
+}
+
 /// Resolves the credential for a route of `app`. A key with `records:admin` bypasses collection
 /// rules; any other key is anonymous to the rules (no `@request.key` yet).
 fn caller(reg: &Registry, headers: &HeaderMap, app: &str) -> ApiResult<Caller> {
@@ -388,6 +399,22 @@ pub fn router(reg: Arc<Registry>) -> Router {
         .route(
             "/api/v1/apps/{app}/api-keys/{id}",
             axum::routing::delete(revoke_api_key),
+        )
+        .route(
+            "/api/v1/apps/{app}/buckets",
+            get(list_buckets).post(create_bucket),
+        )
+        .route(
+            "/api/v1/apps/{app}/buckets/{bucket}",
+            get(get_bucket).put(replace_bucket).delete(delete_bucket),
+        )
+        .route(
+            "/api/v1/apps/{app}/buckets/{bucket}/objects",
+            get(list_objects),
+        )
+        .route(
+            "/api/v1/apps/{app}/buckets/{bucket}/objects/{*key}",
+            get(get_object).put(put_object).delete(delete_object),
         )
         .route("/api/v1/system/stats", get(system_stats))
         .route(
@@ -1168,7 +1195,8 @@ async fn restore_backup(
     Ok((StatusCode::CREATED, axum::Json(app_json(&a))).into_response())
 }
 
-/// Reads a file in 256 KiB chunks on a blocking thread; at most 4 chunks are buffered.
+/// Reads `len` bytes of a file from `offset` in 256 KiB chunks on a blocking thread;
+/// at most 4 chunks are buffered, so a slow client applies backpressure to the disk read.
 struct FileStream(tokio::sync::mpsc::Receiver<std::io::Result<Bytes>>);
 
 impl futures_core::Stream for FileStream {
@@ -1182,22 +1210,24 @@ impl futures_core::Stream for FileStream {
     }
 }
 
-async fn download_backup(
-    State(reg): St,
-    headers: HeaderMap,
-    Path((app, name)): Path<(String, String)>,
-) -> ApiResult<Response> {
-    require_su(&reg, &headers)?;
-    let (mut file, len) = reg.open_backup(&app, &name).await?;
+fn file_body(mut file: std::fs::File, offset: u64, len: u64) -> axum::body::Body {
     let (tx, rx) = tokio::sync::mpsc::channel(4);
     tokio::task::spawn_blocking(move || {
-        use std::io::Read;
-        loop {
-            let mut buf = vec![0u8; 256 * 1024];
+        use std::io::{Read, Seek, SeekFrom};
+        if offset > 0
+            && let Err(e) = file.seek(SeekFrom::Start(offset))
+        {
+            let _ = tx.blocking_send(Err(e));
+            return;
+        }
+        let mut left = len;
+        while left > 0 {
+            let mut buf = vec![0u8; left.min(256 * 1024) as usize];
             match file.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
                     buf.truncate(n);
+                    left -= n as u64;
                     if tx.blocking_send(Ok(Bytes::from(buf))).is_err() {
                         break;
                     }
@@ -1209,7 +1239,17 @@ async fn download_backup(
             }
         }
     });
-    let mut res = Response::new(axum::body::Body::from_stream(FileStream(rx)));
+    axum::body::Body::from_stream(FileStream(rx))
+}
+
+async fn download_backup(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, name)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let (file, len) = reg.open_backup(&app, &name).await?;
+    let mut res = Response::new(file_body(file, 0, len));
     let h = res.headers_mut();
     h.insert(
         header::CONTENT_TYPE,
@@ -1220,6 +1260,327 @@ async fn download_backup(
         h.insert(header::CONTENT_DISPOSITION, v);
     }
     Ok(res)
+}
+
+// ---------- storage buckets (doc 13) ----------
+
+async fn list_buckets(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let items = reg.files(&app).await?.list_buckets().await?;
+    Ok(axum::Json(json!({"items": items})).into_response())
+}
+
+async fn create_bucket(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let b = reg
+        .files(&app)
+        .await?
+        .put_bucket(parse_json(body)?, true)
+        .await?;
+    Ok((StatusCode::CREATED, axum::Json(b)).into_response())
+}
+
+async fn get_bucket(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, bucket)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let b = reg.files(&app).await?.bucket_info(&bucket).await?;
+    Ok(axum::Json(b).into_response())
+}
+
+async fn replace_bucket(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, bucket)): Path<(String, String)>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let input: monolith_core::BucketIn = parse_json(body)?;
+    if input.name != bucket {
+        return Err(ApiError(CoreError::BadRequest(
+            "body name must match the path".into(),
+        )));
+    }
+    let b = reg.files(&app).await?.put_bucket(input, false).await?;
+    Ok(axum::Json(b).into_response())
+}
+
+async fn delete_bucket(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, bucket)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let force = matches!(q.get("force").map(String::as_str), Some("true" | "1"));
+    reg.files(&app).await?.delete_bucket(&bucket, force).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn list_objects(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, bucket)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Response> {
+    caller(&reg, &headers, &app)?.require("files:read", &bucket)?;
+    let limit = match q.get("limit") {
+        None => 100,
+        Some(l) => l
+            .parse::<usize>()
+            .map_err(|_| ApiError(CoreError::BadRequest("limit must be a number".into())))?,
+    };
+    let page = reg
+        .files(&app)
+        .await?
+        .list_objects(
+            &bucket,
+            q.get("prefix").map_or("", String::as_str),
+            limit,
+            q.get("cursor").map(String::as_str),
+        )
+        .await?;
+    Ok(axum::Json(page).into_response())
+}
+
+/// `PUT` with the raw body as content and `Content-Type` as the type. The body is streamed to
+/// disk through a bounded channel; the bucket limit is enforced while it arrives.
+async fn put_object(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, bucket, key)): Path<(String, String, String)>,
+    body: axum::body::Body,
+) -> ApiResult<Response> {
+    caller(&reg, &headers, &app)?.require("files:write", &bucket)?;
+    let files = reg.files(&app).await?;
+    let max = files.bucket(&bucket)?.max_size;
+    let declared = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok()?.parse::<u64>().ok());
+    if declared.is_some_and(|n| n > max) {
+        return Err(ApiError(CoreError::TooLarge(format!(
+            "object over the bucket limit of {max} bytes"
+        ))));
+    }
+    let mime = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let mut up = files.begin_upload(&bucket, &key, mime).await?;
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Bytes>(4);
+    let writer = tokio::task::spawn_blocking(move || {
+        while let Some(chunk) = rx.blocking_recv() {
+            up.write(&chunk)?;
+        }
+        up.finish()
+    });
+    let mut stream = body.into_data_stream();
+    let mut broken = false;
+    loop {
+        use futures_core::Stream;
+        let next = std::future::poll_fn(|cx| std::pin::Pin::new(&mut stream).poll_next(cx)).await;
+        match next {
+            None => break,
+            Some(Ok(chunk)) => {
+                if tx.send(chunk).await.is_err() {
+                    break; // the writer stopped; its error is reported below
+                }
+            }
+            Some(Err(_)) => {
+                broken = true;
+                break;
+            }
+        }
+    }
+    drop(tx);
+    let done = writer
+        .await
+        .map_err(|e| ApiError(CoreError::Internal(e.to_string())))??;
+    if broken {
+        return Err(ApiError(CoreError::BadRequest(
+            "the request body ended early".into(),
+        )));
+    }
+    let info = files.commit(done).await?;
+    let status = if info.created == info.updated {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((status, axum::Json(info)).into_response())
+}
+
+/// Inline display is limited to types a browser cannot run as a page; everything else is a download.
+fn inline_safe(mime: &str) -> bool {
+    let m = mime
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    (m.starts_with("image/") && m != "image/svg+xml")
+        || m.starts_with("audio/")
+        || m.starts_with("video/")
+        || m == "application/pdf"
+        || m == "text/plain"
+}
+
+/// `bytes=a-b`, `a-` or `-n` against a file of `size` bytes. `Ok(None)` serves the whole file
+/// (no header or a multi-range request); `Err` means unsatisfiable.
+fn parse_range(v: Option<&HeaderValue>, size: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(spec) = v
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("bytes="))
+    else {
+        return Ok(None);
+    };
+    if spec.contains(',') {
+        return Ok(None);
+    }
+    let (a, b) = spec.split_once('-').ok_or(())?;
+    let (start, end) = match (a.trim(), b.trim()) {
+        ("", n) => {
+            let n: u64 = n.parse().map_err(|_| ())?;
+            (size.saturating_sub(n), size.saturating_sub(1))
+        }
+        (a, "") => (a.parse().map_err(|_| ())?, size.saturating_sub(1)),
+        (a, b) => (
+            a.parse().map_err(|_| ())?,
+            b.parse::<u64>()
+                .map_err(|_| ())?
+                .min(size.saturating_sub(1)),
+        ),
+    };
+    if size == 0 || start > end || start >= size {
+        return Err(());
+    }
+    Ok(Some((start, end - start + 1)))
+}
+
+/// Public buckets serve anyone; private ones need `files:read` (superuser or key).
+async fn get_object(
+    State(reg): St,
+    headers: HeaderMap,
+    method: axum::http::Method,
+    Path((app, bucket, key)): Path<(String, String, String)>,
+) -> ApiResult<Response> {
+    let files = reg.files(&app).await?;
+    if !files.bucket(&bucket)?.public {
+        caller(&reg, &headers, &app)?.require("files:read", &bucket)?;
+    }
+    let (info, file) = files.open_object(&bucket, &key).await?;
+    let etag = format!("\"{}\"", info.etag);
+    let cache = |res: &mut Response, public: bool| {
+        let h = res.headers_mut();
+        if let Ok(v) = HeaderValue::from_str(&etag) {
+            h.insert(header::ETAG, v);
+        }
+        h.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static(if public {
+                "public, no-cache"
+            } else {
+                "private, no-cache"
+            }),
+        );
+    };
+    let public = files.bucket(&bucket)?.public;
+    let matches = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag || t.trim() == "*"));
+    if matches {
+        let mut res = StatusCode::NOT_MODIFIED.into_response();
+        cache(&mut res, public);
+        return Ok(res);
+    }
+    let range = parse_range(headers.get(header::RANGE), info.size);
+    let (status, offset, len) = match range {
+        Ok(Some((o, l))) => (StatusCode::PARTIAL_CONTENT, o, l),
+        Ok(None) => (StatusCode::OK, 0, info.size),
+        Err(()) => {
+            let mut res = StatusCode::RANGE_NOT_SATISFIABLE.into_response();
+            if let Ok(v) = HeaderValue::from_str(&format!("bytes */{}", info.size)) {
+                res.headers_mut().insert(header::CONTENT_RANGE, v);
+            }
+            return Ok(res);
+        }
+    };
+    let body = if method == axum::http::Method::HEAD {
+        axum::body::Body::empty()
+    } else {
+        file_body(file, offset, len)
+    };
+    let mut res = Response::new(body);
+    *res.status_mut() = status;
+    cache(&mut res, public);
+    let h = res.headers_mut();
+    if let Ok(v) = HeaderValue::from_str(&info.mime) {
+        h.insert(header::CONTENT_TYPE, v);
+    }
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    h.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    if status == StatusCode::PARTIAL_CONTENT
+        && let Ok(v) = HeaderValue::from_str(&format!(
+            "bytes {offset}-{}/{}",
+            offset + len - 1,
+            info.size
+        ))
+    {
+        h.insert(header::CONTENT_RANGE, v);
+    }
+    // User-supplied bytes are served from the API origin: never let them run as a page.
+    h.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
+    h.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static("default-src 'none'; sandbox"),
+    );
+    let name: String = key
+        .rsplit('/')
+        .next()
+        .unwrap_or("file")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_graphic() && c != '"' && c != '\\' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let disp = if inline_safe(&info.mime) {
+        "inline"
+    } else {
+        "attachment"
+    };
+    if let Ok(v) = HeaderValue::from_str(&format!("{disp}; filename=\"{name}\"")) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
+    Ok(res)
+}
+
+async fn delete_object(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, bucket, key)): Path<(String, String, String)>,
+) -> ApiResult<Response> {
+    caller(&reg, &headers, &app)?.require("files:write", &bucket)?;
+    reg.files(&app).await?.delete_object(&bucket, &key).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 // ---------- per-app auth configuration ----------

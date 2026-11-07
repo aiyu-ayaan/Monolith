@@ -1161,3 +1161,329 @@ async fn api_keys_scopes_and_revocation() {
     let r = t.call_with(Method::GET, rec, None, Some(&ro_secret)).await;
     assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }
+
+/// Raw request for storage routes: returns status, headers and body bytes.
+async fn blob(
+    t: &T,
+    method: Method,
+    uri: &str,
+    bearer: Option<&str>,
+    extra: &[(&str, &str)],
+    body: Vec<u8>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let mut b = Request::builder().method(method).uri(uri);
+    if let Some(t) = bearer {
+        b = b.header("authorization", format!("Bearer {t}"));
+    }
+    for (k, v) in extra {
+        b = b.header(*k, *v);
+    }
+    let res = t
+        .app
+        .clone()
+        .oneshot(b.body(Body::from(body)).unwrap())
+        .await
+        .unwrap();
+    let (status, headers) = (res.status(), res.headers().clone());
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    (status, headers, bytes.to_vec())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_buckets_auth_range_and_limits() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    let bk = "/api/v1/apps/demo/buckets";
+    let su = Some(t.token.as_str());
+
+    // Bucket management is superuser-only.
+    let mk = |name: &str, public: bool, max: u64| {
+        Some(json!({"name": name, "public": public, "maxSize": max}))
+    };
+    assert_eq!(
+        t.call(Method::POST, bk, mk("priv", false, 5 << 20), false)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let r = t
+        .call(Method::POST, bk, mk("priv", false, 5 << 20), true)
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    assert_eq!(
+        t.call(Method::POST, bk, mk("priv", false, 5 << 20), true)
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    t.call(Method::POST, bk, mk("pub", true, 1 << 20), true)
+        .await;
+    assert_eq!(
+        t.call(Method::GET, bk, None, true).await.body["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // Upload a body larger than the JSON body limit (3 MiB), streamed.
+    let data: Vec<u8> = (0..3 << 20).map(|i| (i % 251) as u8).collect();
+    let url = format!("{bk}/priv/objects/dir/big.bin");
+    let (s, _, _) = blob(&t, Method::PUT, &url, None, &[], data.clone()).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+    let (s, _, b) = blob(
+        &t,
+        Method::PUT,
+        &url,
+        su,
+        &[("content-type", "application/octet-stream")],
+        data.clone(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{}", String::from_utf8_lossy(&b));
+    let info: Value = serde_json::from_slice(&b).unwrap();
+    assert_eq!(info["size"], 3 << 20);
+
+    // Private read: anonymous 401, superuser OK with validators, ETag revalidates.
+    assert_eq!(
+        blob(&t, Method::GET, &url, None, &[], vec![]).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let (s, h, b) = blob(&t, Method::GET, &url, su, &[], vec![]).await;
+    assert_eq!((s, b == data), (StatusCode::OK, true));
+    assert_eq!(h["content-length"], (3 << 20).to_string().as_str());
+    assert_eq!(h["x-content-type-options"], "nosniff");
+    let etag = h["etag"].to_str().unwrap().to_owned();
+    let (s, _, b) = blob(
+        &t,
+        Method::GET,
+        &url,
+        su,
+        &[("if-none-match", &etag)],
+        vec![],
+    )
+    .await;
+    assert_eq!((s, b.len()), (StatusCode::NOT_MODIFIED, 0));
+    let (s, _, b) = blob(&t, Method::HEAD, &url, su, &[], vec![]).await;
+    assert_eq!((s, b.len()), (StatusCode::OK, 0));
+
+    // Ranges.
+    let (s, h, b) = blob(
+        &t,
+        Method::GET,
+        &url,
+        su,
+        &[("range", "bytes=10-19")],
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        (s, b.as_slice()),
+        (StatusCode::PARTIAL_CONTENT, &data[10..20])
+    );
+    assert_eq!(
+        h["content-range"],
+        format!("bytes 10-19/{}", 3 << 20).as_str()
+    );
+    let (s, _, b) = blob(&t, Method::GET, &url, su, &[("range", "bytes=-5")], vec![]).await;
+    assert_eq!(
+        (s, b.as_slice()),
+        (StatusCode::PARTIAL_CONTENT, &data[data.len() - 5..])
+    );
+    let (s, _, _) = blob(
+        &t,
+        Method::GET,
+        &url,
+        su,
+        &[("range", "bytes=99999999-")],
+        vec![],
+    )
+    .await;
+    assert_eq!(s, StatusCode::RANGE_NOT_SATISFIABLE);
+
+    // Keys: scoped read works, other bucket is 403, write scope is separate, other app is 403.
+    let mkkey = |scopes: Value| {
+        let t = &t;
+        async move {
+            let r = t
+                .call(
+                    Method::POST,
+                    "/api/v1/apps/demo/api-keys",
+                    Some(json!({"name":"k","scopes":scopes})),
+                    true,
+                )
+                .await;
+            r.body["key"].as_str().unwrap().to_owned()
+        }
+    };
+    let rk = mkkey(json!(["files:read:priv"])).await;
+    assert_eq!(
+        blob(&t, Method::GET, &url, Some(&rk), &[], vec![]).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        blob(
+            &t,
+            Method::GET,
+            &format!("{bk}/pub/objects/x"),
+            Some(&rk),
+            &[],
+            vec![]
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND,
+        "public bucket skips the scope check"
+    );
+    assert_eq!(
+        blob(&t, Method::PUT, &url, Some(&rk), &[], b"x".to_vec())
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        blob(
+            &t,
+            Method::GET,
+            &format!("{bk}/priv/objects"),
+            Some(&rk),
+            &[],
+            vec![]
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let wk = mkkey(json!(["files:write"])).await;
+    assert_eq!(
+        blob(
+            &t,
+            Method::PUT,
+            &format!("{bk}/priv/objects/w.txt"),
+            Some(&wk),
+            &[("content-type", "text/plain")],
+            b"hi".to_vec()
+        )
+        .await
+        .0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        blob(&t, Method::GET, &url, Some(&wk), &[], vec![]).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        blob(&t, Method::POST, bk, Some(&wk), &[], vec![]).await.0,
+        StatusCode::UNAUTHORIZED,
+        "keys cannot manage buckets"
+    );
+
+    // Public bucket: anonymous read, but listing and writes need a credential; hostile types download.
+    let html = format!("{bk}/pub/objects/page.html");
+    let (s, _, _) = blob(
+        &t,
+        Method::PUT,
+        &html,
+        su,
+        &[("content-type", "text/html")],
+        b"<script>1</script>".to_vec(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let (s, h, _) = blob(&t, Method::GET, &html, None, &[], vec![]).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        h["content-disposition"]
+            .to_str()
+            .unwrap()
+            .starts_with("attachment")
+    );
+    assert!(
+        h["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("sandbox")
+    );
+    assert_eq!(
+        blob(
+            &t,
+            Method::GET,
+            &format!("{bk}/pub/objects"),
+            None,
+            &[],
+            vec![]
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        blob(&t, Method::PUT, &html, None, &[], b"x".to_vec())
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Size limit: declared and streamed (chunked has no content-length in this harness only when absent).
+    let big = vec![0u8; (1 << 20) + 1];
+    let (s, _, _) = blob(
+        &t,
+        Method::PUT,
+        &format!("{bk}/pub/objects/big"),
+        su,
+        &[],
+        big,
+    )
+    .await;
+    assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(
+        blob(
+            &t,
+            Method::GET,
+            &format!("{bk}/pub/objects/big"),
+            None,
+            &[],
+            vec![]
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Listing, delete, bucket delete.
+    let l = t
+        .call(
+            Method::GET,
+            &format!("{bk}/priv/objects?prefix=dir/"),
+            None,
+            true,
+        )
+        .await;
+    assert_eq!(l.body["items"][0]["key"], "dir/big.bin");
+    assert_eq!(
+        t.call(Method::DELETE, &url, None, true).await.status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        t.call(Method::DELETE, &url, None, true).await.status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        t.call(Method::DELETE, &format!("{bk}/priv"), None, true)
+            .await
+            .status,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        t.call(Method::DELETE, &format!("{bk}/priv?force=true"), None, true)
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+}
