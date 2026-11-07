@@ -14,7 +14,7 @@ interface Item {
 const AUTH: Item = { id: "auth", label: "Authentication", icon: "key", to: "/auth" };
 const DB: Item = { id: "db", label: "Database", icon: "database" };
 const ANALYTICS: Item = { id: "analytics", label: "Analytics", icon: "chart", to: "/analytics" };
-const STORAGE: Item = { id: "storage", label: "Storage", icon: "storage" };
+const STORAGE: Item = { id: "storage", label: "Storage", icon: "storage", to: "/storage" };
 const REALTIME: Item = { id: "realtime", label: "Realtime", icon: "radio", to: "/realtime" };
 
 const SHORTCUTS = [AUTH, DB, STORAGE, REALTIME, ANALYTICS];

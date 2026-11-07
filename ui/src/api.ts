@@ -257,6 +257,25 @@ export interface ApiKey {
   expires: string | null;
 }
 
+export interface Bucket {
+  name: string;
+  public: boolean;
+  maxSize: number;
+  allowedMime: string[];
+  created: string;
+  objects: number;
+  bytes: number;
+}
+
+export interface StorageObject {
+  key: string;
+  size: number;
+  mime: string;
+  etag: string;
+  created: string;
+  updated: string;
+}
+
 export interface Backup {
   name: string;
   bytes: number;

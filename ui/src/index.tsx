@@ -15,6 +15,7 @@ import Rules from "./pages/Rules";
 import Realtime from "./pages/Realtime";
 import Backups from "./pages/Backups";
 import ApiKeys from "./pages/ApiKeys";
+import Storage from "./pages/Storage";
 import "./styles.css";
 
 function Shell(props: RouteSectionProps) {
@@ -66,6 +67,7 @@ render(
             <Route path="/realtime" component={Realtime} />
             <Route path="/backups" component={Backups} />
             <Route path="/keys" component={ApiKeys} />
+            <Route path="/storage" component={Storage} />
             <Route path="/c/:coll" component={Records} />
           </Route>
         </Route>
