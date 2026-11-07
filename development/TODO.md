@@ -98,7 +98,9 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
       and `<coll>_via_<field>` back-relations (over both single and multi relations) in rules, filters, and `expand`
 - [x] `@request.body.<field>:isset` and `@request.body.<field>:changed` write-rule modifiers (with bitmask tracking in `Body` and `rules:explain`)
 - [x] `fields` projection pushed into list SQL (system cols + sort keys kept for cursors; `expand` keeps full columns)
-- [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md, precompressed UI assets (brotli/gzip),
+- [x] Precompressed admin UI assets: `tools/precompress.mjs` writes `.br` (q11) + `.gz` after `vite build`; server picks by
+      `Accept-Encoding`, serves embedded bytes zero-copy (JS 98 KB raw → 29 KB br)
+- [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md,
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
 - [ ] Phase 1 exit: M1–M6 gates, ported PocketBase rules vectors
 

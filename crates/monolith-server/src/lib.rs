@@ -303,7 +303,10 @@ pub fn router(reg: Arc<Registry>) -> Router {
             "/_",
             get(|| async { axum::response::Redirect::permanent("/_/") }),
         )
-        .route("/_/", get(|| ui_asset(Path(String::new()))))
+        .route(
+            "/_/",
+            get(|headers: HeaderMap| ui_asset(Path(String::new()), headers)),
+        )
         .route("/_/{*path}", get(ui_asset))
         .fallback(|| async { ApiError(CoreError::NotFound("route")) })
         .layer(DefaultBodyLimit::max(MAX_BODY))
@@ -946,19 +949,19 @@ async fn app_stats(
 // ---------- admin UI (doc 15 §4) ----------
 
 /// `ui/dist`, embedded in release builds and read from disk in debug builds.
-// shortcut: served uncompressed; doc 15 wants brotli/gzip precompressed at build time.
+/// `tools/precompress.mjs` adds `.br`/`.gz` siblings at build time.
 #[derive(rust_embed::RustEmbed)]
 #[folder = "../../ui/dist"]
 #[allow_missing = true]
 struct UiAssets;
 
-async fn ui_asset(Path(path): Path<String>) -> Response {
+async fn ui_asset(Path(path): Path<String>, headers: HeaderMap) -> Response {
     let path = if path.is_empty() {
         "index.html"
     } else {
         path.as_str()
     };
-    let Some(file) = UiAssets::get(path) else {
+    let Some(raw) = UiAssets::get(path) else {
         let msg = if UiAssets::get("index.html").is_none() {
             "admin UI not built: run `pnpm build:ui` and rebuild the server"
         } else {
@@ -966,19 +969,47 @@ async fn ui_asset(Path(path): Path<String>) -> Response {
         };
         return (StatusCode::NOT_FOUND, msg).into_response();
     };
+    let accept = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let accepts = |enc: &str| {
+        accept
+            .split(',')
+            .any(|t| t.split(';').next().is_some_and(|n| n.trim() == enc))
+    };
+    let (file, encoding) = [("br", ".br"), ("gzip", ".gz")]
+        .into_iter()
+        .filter(|(enc, _)| accepts(enc))
+        .find_map(|(enc, ext)| UiAssets::get(&format!("{path}{ext}")).map(|f| (f, Some(enc))))
+        .unwrap_or((raw.clone(), None));
     // Vite hashes asset names, so they never change; index.html must always revalidate.
     let cache = if path.starts_with("assets/") {
         "public, max-age=31536000, immutable"
     } else {
         "no-cache"
     };
-    let mime = file.metadata.mimetype().to_owned();
-    (
-        [
-            (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, cache.to_owned()),
-        ],
-        file.data.into_owned(),
-    )
-        .into_response()
+    let mut res = Response::new(match file.data {
+        std::borrow::Cow::Borrowed(b) => axum::body::Body::from(b),
+        std::borrow::Cow::Owned(v) => axum::body::Body::from(v),
+    });
+    let h = res.headers_mut();
+    if let Ok(v) = header::HeaderValue::from_str(raw.metadata.mimetype()) {
+        h.insert(header::CONTENT_TYPE, v);
+    }
+    h.insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static(cache),
+    );
+    h.insert(
+        header::VARY,
+        header::HeaderValue::from_static("accept-encoding"),
+    );
+    if let Some(enc) = encoding {
+        h.insert(
+            header::CONTENT_ENCODING,
+            header::HeaderValue::from_static(enc),
+        );
+    }
+    res
 }

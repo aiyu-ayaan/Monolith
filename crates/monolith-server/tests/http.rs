@@ -419,6 +419,33 @@ async fn admin_ui_route() {
                 .starts_with("text/html")
         );
         assert_eq!(res.headers()["cache-control"], "no-cache");
+        assert!(res.headers().get("content-encoding").is_none());
+        // Precompressed sibling (when `pnpm build:ui` wrote one) is picked by Accept-Encoding.
+        let br = t
+            .app
+            .clone()
+            .oneshot(
+                Request::get("/_/")
+                    .header("accept-encoding", "gzip, br;q=0.9")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(br.status(), StatusCode::OK);
+        assert_eq!(br.headers()["vary"], "accept-encoding");
+        assert!(
+            br.headers()["content-type"]
+                .to_str()
+                .unwrap()
+                .starts_with("text/html")
+        );
+        assert!(matches!(
+            br.headers()
+                .get("content-encoding")
+                .map(|v| v.to_str().unwrap()),
+            None | Some("gzip" | "br")
+        ));
     }
 }
 
