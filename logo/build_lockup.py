@@ -1,7 +1,7 @@
 """Builds the Monolith wordmark and lockups as outlined SVG paths.
 
 Font: Inter Bold (SIL OFL 1.1, allows logo use). Run:
-  python3 brand/logo/build_lockup.py /path/to/Inter-Bold.otf
+  python3 logo/build_lockup.py /path/to/Inter-Bold.otf
 """
 import sys
 from fontTools.ttLib import TTFont
