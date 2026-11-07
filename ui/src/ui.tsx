@@ -6,7 +6,8 @@ import { Dynamic } from "solid-js/web";
 
 // Lucide icon paths (ISC license), inlined so the UI makes no external requests.
 const ICONS = {
-  logo: '<rect x="7" y="2" width="10" height="20" rx="2" fill="currentColor" stroke="none"/>',
+  // Monolith Keystone M (logo/monolith-symbol.svg), 256 grid scaled to 24.
+  logo: '<path transform="scale(0.09375)" fill="currentColor" stroke="none" d="M58 24H98L128 136L158 24H198A8 8 0 0 1 206 32V224A8 8 0 0 1 198 232H58A8 8 0 0 1 50 224V32A8 8 0 0 1 58 24Z"/>',
   layers:
     '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
   database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5V19A9 3 0 0 0 21 19V5"/><path d="M3 12A9 3 0 0 0 21 12"/>',
