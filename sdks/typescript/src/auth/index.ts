@@ -1,4 +1,8 @@
 import type { HttpClient } from "../http/client.js";
+import { AppAuth } from "./app.js";
+
+export * from "./app.js";
+export * from "./session.js";
 
 export interface AuthSession {
   token: string;
@@ -7,15 +11,25 @@ export interface AuthSession {
 
 export type AuthChangeListener = (token: string | null) => void;
 
+/**
+ * Token-oriented auth service returned by `client.auth("users")` (kept for existing code and the superuser/admin flow).
+ * App-user flows with state, refresh and storage live on `client.auth.*` (see `AppAuth`).
+ */
 export class AuthService {
-  private listeners: Set<AuthChangeListener> = new Set();
   private authCollection: string;
+  private appAuth: AppAuth;
 
   constructor(
     private http: HttpClient,
     collection: string = "users",
+    appAuth?: AppAuth,
   ) {
     this.authCollection = collection;
+    this.appAuth = appAuth ?? AppAuth.for(http);
+  }
+
+  private get isSystem(): boolean {
+    return this.authCollection === "_superusers" || this.authCollection === "system";
   }
 
   get token(): string | null {
@@ -23,58 +37,39 @@ export class AuthService {
   }
 
   setToken(token: string | null): void {
-    this.http.setToken(token);
-    this.notify(token);
+    this.appAuth.setToken(token);
   }
 
+  /** Called with the access token (or `null`) on every change. For user objects use `client.auth.onChange`. */
   onChange(listener: AuthChangeListener): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
-  }
-
-  private notify(token: string | null): void {
-    for (const listener of this.listeners) {
-      try {
-        listener(token);
-      } catch {
-        // ignore listener errors
-      }
-    }
+    return this.appAuth.onTokenChange(listener);
   }
 
   async signInWithPassword(email: string, password: string): Promise<AuthSession> {
-    const isSystem = this.authCollection === "_superusers" || this.authCollection === "system";
-    const path = isSystem
-      ? "/api/v1/system/login"
-      : `/api/v1/apps/${encodeURIComponent(this.http.app)}/auth/login`;
-
-    const res = await this.http.request<{ token: string; user?: Record<string, unknown> }>("POST", path, {
-      body: { email, password },
-    });
-
-    if (res.token) {
-      this.setToken(res.token);
+    if (!this.isSystem) {
+      const user = await this.appAuth.signIn({ email, password });
+      return { token: this.http.getToken() ?? "", user: user as unknown as Record<string, unknown> };
     }
-
+    const res = await this.http.request<{ token: string; user?: Record<string, unknown> }>(
+      "POST",
+      "/api/v1/system/auth/login",
+      { body: { email, password }, skipAuth: true },
+    );
+    if (res.token) this.setToken(res.token);
     return res;
   }
 
   async install(token: string, email: string, password: string): Promise<AuthSession> {
     const res = await this.http.request<{ token: string }>("POST", "/api/v1/system/install", {
       body: { token, email, password },
+      skipAuth: true,
     });
-
-    if (res.token) {
-      this.setToken(res.token);
-    }
-
+    if (res.token) this.setToken(res.token);
     return res;
   }
 
-  signOut(): void {
-    this.setToken(null);
+  /** Clears the local session at once (synchronously), then logs out on the server when there is a refresh token. */
+  signOut(): Promise<void> {
+    return this.appAuth.signOut();
   }
 }
-

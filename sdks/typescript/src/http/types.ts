@@ -3,6 +3,10 @@ export interface ClientOptions {
   app?: string;
   key?: string;
   token?: string;
+  /** Session storage for app users. Default: memory (use `Monolith.init` for `localStorage`). */
+  storage?: import("../auth/session.js").AuthStorage;
+  /** Default redirect target for provider sign-in (default: the current page without its hash). */
+  redirectUri?: string;
   fetch?: typeof fetch;
   headers?: Record<string, string>;
 }

@@ -55,7 +55,7 @@ class Stream {
     if (!this.snapshot && this.lastSeq > 0) query.since = this.lastSeq;
     const url = this.http.buildUrl(`/api/v1/apps/${encodeURIComponent(this.http.app)}/realtime`, query);
     const headers: Record<string, string> = { Accept: "text/event-stream", "Cache-Control": "no-cache" };
-    const token = this.http.getToken() || this.http.getApiKey();
+    const token = (await this.http.freshToken()) || this.http.getApiKey();
     if (token) headers.Authorization = `Bearer ${token}`;
 
     try {

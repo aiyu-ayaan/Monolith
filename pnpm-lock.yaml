@@ -201,6 +201,10 @@ importers:
         version: link:../../sdks/typescript
 
   sdks/typescript:
+    dependencies:
+      react:
+        specifier: '>=18'
+        version: 19.3.1
     devDependencies:
       '@typescript/typescript6':
         specifier: ^6.0.2
@@ -1313,6 +1317,10 @@ packages:
     resolution: {integrity: sha512-DEvV2ZF2r2/63V+tK8hQvrR2ZGn10srHbXviTlcv7Kpzw8jWiNTqbVgjO3IY8RxrrOUF8VPMQQFysYYYv0YZxw==}
     engines: {node: '>=6'}
 
+  react@19.3.1:
+    resolution: {integrity: sha512-QNhWdt7nrgVWWQG58QuGsAR3jv3Hbe4mb4vz7w2csnHavciZJgda1CPNaldF6eVxv90ud3jUXpKlHL69gO38yw==}
+    engines: {node: '>=0.10.0'}
+
   readdirp@5.1.1:
     resolution: {integrity: sha512-Kko+Y5XQ6fM+Ce3dq3m9YGxnacYZYl9cA1wZjaF3Vbry2L3i1qVg8+CAgNPsXRArPMUMCaOR7oa9Nqntc43JKA==}
     engines: {node: '>= 20.19.0'}
@@ -2351,6 +2359,8 @@ snapshots:
       source-map-js: 1.2.2
 
   prismjs@1.30.0: {}
+
+  react@19.3.1: {}
 
   readdirp@5.1.1: {}
 

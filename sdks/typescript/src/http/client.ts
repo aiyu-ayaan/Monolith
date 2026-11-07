@@ -1,7 +1,17 @@
 import { MonolithError, Problem } from "../errors/index.js";
 import type { ClientOptions } from "./types.js";
 
+/** Lets the auth layer refresh tokens inside the HTTP stack. */
+export interface AuthHandler {
+  /** The access token to send; refreshes first when it is about to expire. */
+  accessToken(): Promise<string | null>;
+  /** A request sent with `usedToken` got 401. True when a single retry makes sense. */
+  onUnauthorized(usedToken: string): Promise<boolean>;
+}
+
 export interface RequestOptions {
+  /** Send no credentials and never refresh (public auth endpoints). */
+  skipAuth?: boolean;
   query?: Record<string, unknown>;
   body?: unknown;
   headers?: Record<string, string>;
@@ -15,6 +25,7 @@ export class HttpClient {
   private apiKey: string | null = null;
   private customFetch: typeof fetch;
   private defaultHeaders: Record<string, string>;
+  private authHandler: AuthHandler | null = null;
 
   constructor(options: ClientOptions) {
     this.baseUrl = options.url.replace(/\/+$/, "");
@@ -31,6 +42,15 @@ export class HttpClient {
 
   getToken(): string | null {
     return this.token;
+  }
+
+  setAuthHandler(handler: AuthHandler | null): void {
+    this.authHandler = handler;
+  }
+
+  /** The current access token, refreshed first when needed. */
+  async freshToken(): Promise<string | null> {
+    return this.authHandler ? this.authHandler.accessToken() : this.token;
   }
 
   setApiKey(key: string | null): void {
@@ -68,11 +88,6 @@ export class HttpClient {
       ...options.headers,
     };
 
-    const authToken = this.token || this.apiKey;
-    if (authToken && !headers.authorization && !headers.Authorization) {
-      headers.authorization = `Bearer ${authToken}`;
-    }
-
     let bodyData: BodyInit | undefined = undefined;
     if (options.body !== undefined) {
       if (
@@ -89,6 +104,39 @@ export class HttpClient {
       }
     }
 
+    const explicitAuth = Boolean(headers.authorization || headers.Authorization);
+    const managed = !options.skipAuth && !explicitAuth && this.authHandler !== null;
+    const sessionToken = async (): Promise<string | null> => {
+      if (options.skipAuth || explicitAuth) return null;
+      return managed ? this.authHandler!.accessToken() : this.token;
+    };
+
+    const used = await sessionToken();
+    const firstAuth = options.skipAuth || explicitAuth ? null : used || this.apiKey;
+    try {
+      return await this.send<T>(method, url, headers, bodyData, options.signal, firstAuth);
+    } catch (err) {
+      if (managed && used && err instanceof MonolithError && err.status === 401) {
+        // Refresh once (single-flight in the handler), then retry once.
+        if (await this.authHandler!.onUnauthorized(used)) {
+          const next = await sessionToken();
+          return this.send<T>(method, url, headers, bodyData, options.signal, next || this.apiKey);
+        }
+      }
+      throw err;
+    }
+  }
+
+  private async send<T>(
+    method: string,
+    url: string,
+    baseHeaders: Record<string, string>,
+    bodyData: BodyInit | undefined,
+    signal: AbortSignal | undefined,
+    authToken: string | null,
+  ): Promise<T> {
+    const headers = { ...baseHeaders };
+    if (authToken) headers.authorization = `Bearer ${authToken}`;
     const isGet = method.toUpperCase() === "GET";
     const maxAttempts = isGet ? 4 : 1;
 
@@ -99,7 +147,7 @@ export class HttpClient {
           method,
           headers,
           body: bodyData,
-          signal: options.signal,
+          signal,
         });
       } catch (err: unknown) {
         if (attempt < maxAttempts - 1) {
