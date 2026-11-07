@@ -790,10 +790,146 @@ a:hover {
 .code-pre {
   padding: 18px 20px;
   font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 13.5px;
+  line-height: 1.65;
   overflow-x: auto;
   color: var(--text-primary);
+}
+
+.code-pre code {
+  font-family: inherit;
+  font-size: inherit;
+  display: block;
+}
+
+/* Code syntax highlighting - Light Mode (Google Developer / GitHub style) */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #6E7781;
+  font-style: italic;
+}
+
+.token.punctuation {
+  color: #24292F;
+}
+
+.token.property,
+.token.tag,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #0550AE;
+}
+
+.token.number {
+  color: #0550AE;
+  font-weight: 500;
+}
+
+.token.boolean {
+  color: #CF222E;
+  font-weight: 600;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #0A7B3E; /* Clear vibrant green */
+}
+
+.token.operator,
+.token.entity,
+.token.url {
+  color: #CF222E;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #CF222E; /* Red / Coral keyword */
+  font-weight: 600;
+}
+
+.token.function,
+.token.class-name {
+  color: #8250DF; /* Royal purple */
+  font-weight: 500;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #953800;
+}
+
+/* Code syntax highlighting - Dark Mode (VS Code / Firebase Cloud style) */
+[data-theme="dark"] .token.comment,
+[data-theme="dark"] .token.prolog,
+[data-theme="dark"] .token.doctype,
+[data-theme="dark"] .token.cdata {
+  color: #8B949E;
+  font-style: italic;
+}
+
+[data-theme="dark"] .token.punctuation {
+  color: #C9D1D9;
+}
+
+[data-theme="dark"] .token.property,
+[data-theme="dark"] .token.tag,
+[data-theme="dark"] .token.constant,
+[data-theme="dark"] .token.symbol,
+[data-theme="dark"] .token.deleted {
+  color: #79C0FF;
+}
+
+[data-theme="dark"] .token.number {
+  color: #FFA657;
+  font-weight: 500;
+}
+
+[data-theme="dark"] .token.boolean {
+  color: #FF7B72;
+  font-weight: 600;
+}
+
+[data-theme="dark"] .token.selector,
+[data-theme="dark"] .token.attr-name,
+[data-theme="dark"] .token.string,
+[data-theme="dark"] .token.char,
+[data-theme="dark"] .token.builtin,
+[data-theme="dark"] .token.inserted {
+  color: #7EE787; /* Pastel green */
+}
+
+[data-theme="dark"] .token.operator,
+[data-theme="dark"] .token.entity,
+[data-theme="dark"] .token.url {
+  color: #FF7B72;
+}
+
+[data-theme="dark"] .token.atrule,
+[data-theme="dark"] .token.attr-value,
+[data-theme="dark"] .token.keyword {
+  color: #FF7B72; /* Warm coral red/pink */
+  font-weight: 600;
+}
+
+[data-theme="dark"] .token.function,
+[data-theme="dark"] .token.class-name {
+  color: #D2A8FF; /* Bright lavender purple */
+  font-weight: 500;
+}
+
+[data-theme="dark"] .token.regex,
+[data-theme="dark"] .token.important,
+[data-theme="dark"] .token.variable {
+  color: #FFA657;
 }
 
 /* Right Sidebar: TOC & AI Drawer - Flush with Right Viewport Edge */

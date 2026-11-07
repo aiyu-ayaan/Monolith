@@ -1,4 +1,15 @@
-import { createSignal, For } from "solid-js";
+import { createSignal, createMemo, For } from "solid-js";
+import Prism from "prismjs";
+import "prismjs/components/prism-clike.js";
+import "prismjs/components/prism-javascript.js";
+import "prismjs/components/prism-typescript.js";
+import "prismjs/components/prism-kotlin.js";
+import "prismjs/components/prism-dart.js";
+import "prismjs/components/prism-python.js";
+import "prismjs/components/prism-rust.js";
+import "prismjs/components/prism-swift.js";
+import "prismjs/components/prism-bash.js";
+import "prismjs/components/prism-json.js";
 import { CodeSnippets } from "../data/pages";
 
 export type SupportedLanguage = "ts" | "kotlin" | "dart" | "python" | "rust" | "swift" | "rest";
@@ -13,6 +24,27 @@ export const LANGUAGE_LABELS: Record<SupportedLanguage, string> = {
   rest: "REST (cURL)",
 };
 
+const getPrismLang = (lang: SupportedLanguage) => {
+  switch (lang) {
+    case "ts":
+      return { grammar: Prism.languages.typescript, name: "typescript" };
+    case "kotlin":
+      return { grammar: Prism.languages.kotlin, name: "kotlin" };
+    case "dart":
+      return { grammar: Prism.languages.dart, name: "dart" };
+    case "python":
+      return { grammar: Prism.languages.python, name: "python" };
+    case "rust":
+      return { grammar: Prism.languages.rust, name: "rust" };
+    case "swift":
+      return { grammar: Prism.languages.swift, name: "swift" };
+    case "rest":
+      return { grammar: Prism.languages.bash, name: "bash" };
+    default:
+      return { grammar: Prism.languages.clike, name: "clike" };
+  }
+};
+
 export default function CodeBlock(props: {
   snippets: CodeSnippets;
   selectedLang: SupportedLanguage;
@@ -25,19 +57,30 @@ export default function CodeBlock(props: {
     return list.filter((l) => Boolean(props.snippets[l]));
   };
 
-  const activeSnippet = (): string => {
-    return (
-      props.snippets[props.selectedLang] ??
-      props.snippets.ts ??
-      props.snippets.kotlin ??
-      props.snippets.dart ??
-      props.snippets.python ??
-      props.snippets.rust ??
-      props.snippets.swift ??
-      props.snippets.rest ??
-      ""
-    );
+  const effectiveLang = (): SupportedLanguage => {
+    if (props.snippets[props.selectedLang]) {
+      return props.selectedLang;
+    }
+    const available = availableLangs();
+    return available[0] ?? "ts";
   };
+
+  const activeSnippet = (): string => {
+    const lang = effectiveLang();
+    return props.snippets[lang] ?? "";
+  };
+
+  const highlightedHtml = createMemo(() => {
+    const code = activeSnippet();
+    const lang = effectiveLang();
+    const { grammar, name } = getPrismLang(lang);
+    if (!grammar) return code;
+    try {
+      return Prism.highlight(code, grammar, name);
+    } catch {
+      return code;
+    }
+  });
 
   const handleCopy = () => {
     const text = activeSnippet();
@@ -56,7 +99,7 @@ export default function CodeBlock(props: {
               <button
                 type="button"
                 class="code-tab"
-                classList={{ active: props.selectedLang === lang || (!props.snippets[props.selectedLang] && availableLangs()[0] === lang) }}
+                classList={{ active: effectiveLang() === lang }}
                 onClick={() => props.onSelectLang(lang)}
               >
                 {LANGUAGE_LABELS[lang]}
@@ -71,7 +114,7 @@ export default function CodeBlock(props: {
       </div>
 
       <pre class="code-pre">
-        <code>{activeSnippet()}</code>
+        <code class={`language-${getPrismLang(effectiveLang()).name}`} innerHTML={highlightedHtml()} />
       </pre>
     </div>
   );
