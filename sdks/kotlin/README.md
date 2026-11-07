@@ -5,12 +5,14 @@ Idiomatic Kotlin Multiplatform and Android SDK for the Monolith backend suite.
 ## Modules
 
 - **`monolith-core`**: Kotlin Multiplatform client (JVM, Android, iOS targets). Powered by Ktor Client and `kotlinx.serialization`. Pure Kotlin without Android platform dependencies.
-- **`monolith-android`**: Android AAR library providing Android context integration, automatic encrypted token storage via `EncryptedSharedPreferences`, and builder convenience.
+- **`monolith-android`**: Android AAR library providing Android context integration, automatic encrypted token storage via `EncryptedSharedPreferences`, and builder convenience. `Monolith.init(context, url, app)` adds encrypted session storage, a Custom Tab launcher for provider sign-in and `MonolithAuthRedirectActivity`.
+- **`monolith-compose`**: Jetpack Compose (Material 3) auth UI: `MonolithAuth`, `AuthGate`, `rememberAuthController`, `AuthUiOptions`, `UserChip`, `SignOutButton`.
 
 ## Coordinates
 
 - `dev.monolith:monolith-core:<version>`
 - `dev.monolith:monolith-android:<version>`
+- `dev.monolith:monolith-compose:<version>`
 
 ## Quickstart
 
@@ -49,6 +51,21 @@ val invoiceUrl = mono.files.getURL("receipts", "invoice.pdf")
 mono.analytics.track("task_completed", buildJsonObject { put("taskId", newTask.id) })
 mono.analytics.flush()
 ```
+
+### Android: app users and the sign-in screen
+
+```kotlin
+import dev.monolith.android.init
+
+val mono = Monolith.init(context, url = "https://api.example.com", app = "shop")
+
+// Compose: shows the sign-in screen until the user is signed in
+setContent { AuthGate(mono) { Home(mono) } }
+```
+
+Provider sign-in returns to `monolith-<app>://auth` by default. Declare `MonolithAuthRedirectActivity` in the
+app manifest with that scheme (see the class docs) and add the URL to the app's *Allowed redirect URLs* in the Admin UI.
+The Compose module is covered by logic unit tests only; the widgets have no render tests yet.
 
 ### Multiplatform (JVM / Common)
 

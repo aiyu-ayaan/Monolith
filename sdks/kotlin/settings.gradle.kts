@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 rootProject.name = "monolith-kotlin"
 include(":monolith-core")
 include(":monolith-android")
+include(":monolith-compose")

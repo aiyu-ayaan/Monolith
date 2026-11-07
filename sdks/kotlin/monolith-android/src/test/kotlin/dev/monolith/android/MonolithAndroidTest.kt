@@ -48,6 +48,23 @@ class MonolithAndroidTest {
     }
 
     @Test
+    fun defaultRedirectUriUsesTheAppName() {
+        assertEquals("monolith-shop://auth", defaultRedirectUri("shop"))
+    }
+
+    @Test
+    fun initReturnsTheSameClientAndKeepsTheRedirectUri() {
+        val ctx = TestContext()
+        val storage = dev.monolith.client.auth.MemorySessionStorage()
+        val launcher = dev.monolith.client.auth.BrowserLauncher { }
+        val a = dev.monolith.client.Monolith.init(ctx, "https://api.example.com", "shop", storage = storage, browserLauncher = launcher)
+        val b = dev.monolith.client.Monolith.init(ctx, "https://api.example.com/", "shop", storage = storage, browserLauncher = launcher)
+        assertSame(a, b)
+        assertEquals("monolith-shop://auth", a.auth.redirectUri)
+        assertTrue(a.auth.canLaunchBrowser)
+    }
+
+    @Test
     fun testBuilderExplicitTokenOverridesStorage() {
         val fakeStorage = FakeTokenStorage("initial_saved_token")
         val client = MonolithAndroid.Builder(TestContext())
