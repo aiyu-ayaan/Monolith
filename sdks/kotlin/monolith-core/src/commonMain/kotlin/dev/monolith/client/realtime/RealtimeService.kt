@@ -2,7 +2,6 @@ package dev.monolith.client.realtime
 
 import dev.monolith.client.http.HttpClient
 import dev.monolith.client.http.RecordModel
-import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
@@ -14,171 +13,169 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.KSerializer
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
-import kotlinx.serialization.serializer
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.random.Random
 
 /**
  * Event representing a realtime database mutation.
+ *
+ * [action] is the server `op`: `create`, `update`, `delete` or `leave`. `leave` means the
+ * record stopped matching the subscription's filter or rule (it was not deleted).
+ * [seq] is the change-log sequence number, the resume point after a reconnect.
  */
 data class RealtimeEvent<T>(
     val action: String,
     val record: T,
-    val collection: String
+    val collection: String,
+    val seq: Long? = null
 )
 
 typealias RealtimeListener<T> = (RealtimeEvent<T>) -> Unit
 
-private interface SubscriptionEntry {
-    val filter: String?
-    fun dispatch(event: RawRealtimePayload, json: Json)
-}
+/** Kind of change between two consecutive [QuerySnapshot]s. */
+enum class DocumentChangeType { ADDED, MODIFIED, REMOVED }
 
-private class TypedSubscriptionEntry<T>(
-    override val filter: String?,
-    val listener: RealtimeListener<T>,
-    val serializer: KSerializer<T>?
-) : SubscriptionEntry {
-    override fun dispatch(event: RawRealtimePayload, json: Json) {
-        val parsedRecord: T = if (serializer != null) {
-            json.decodeFromJsonElement(serializer, event.record)
-        } else {
-            @Suppress("UNCHECKED_CAST")
-            (json.decodeFromJsonElement(RecordModel.serializer(), event.record) as T)
-        }
+data class DocumentChange<T>(val type: DocumentChangeType, val doc: T)
 
-        val typedEvent = RealtimeEvent(
-            action = event.op,
-            record = parsedRecord,
-            collection = event.collection
-        )
-
-        try {
-            listener(typedEvent)
-        } catch (_: Throwable) {
-            // Ignore subscriber callback exceptions
-        }
-    }
-}
-
-@Serializable
-internal data class RawRealtimePayload(
-    val op: String = "update",
-    val collection: String = "",
-    val seq: Long = 0,
-    val record: JsonElement = JsonObject(emptyMap())
+/**
+ * Result set of an [RealtimeService.onSnapshot] query.
+ * [docs] is the current result in order; [changes] is what changed since the previous
+ * snapshot (everything is ADDED in the first one).
+ */
+data class QuerySnapshot<T>(
+    val docs: List<T>,
+    val changes: List<DocumentChange<T>>
 )
 
 /**
- * Multiplexed Server-Sent Events (SSE) realtime service for subscribing to
- * live record updates across collections.
+ * Options for [RealtimeService.onSnapshot]. [sort] uses the list syntax (`-created,title`).
+ * [onError] receives server `error` events.
  */
-class RealtimeService(
-    private val http: HttpClient,
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+data class SnapshotOptions(
+    val filter: String? = null,
+    val sort: String? = null,
+    val limit: Int = 100,
+    val onError: ((Throwable) -> Unit)? = null
+)
+
+private fun <T> decodeRecord(json: Json, serializer: KSerializer<T>?, element: JsonElement): T =
+    if (serializer != null) {
+        json.decodeFromJsonElement(serializer, element)
+    } else {
+        @Suppress("UNCHECKED_CAST")
+        (json.decodeFromJsonElement(RecordModel.serializer(), element) as T)
+    }
+
+private class SubscriptionEntry<T>(
+    val listener: RealtimeListener<T>,
+    val serializer: KSerializer<T>?
 ) {
-    private val subscriptions = mutableMapOf<String, MutableSet<SubscriptionEntry>>()
-    private val mutex = Mutex()
-    private var streamJob: Job? = null
-    private var reconnectAttempts = 0
-    private var isConnected = false
-
-    fun isConnected(): Boolean = isConnected
-
-    /**
-     * Subscribes a listener to change events in the given [collection].
-     * Returns an unsubscribe function.
-     */
-    fun <T> subscribe(
-        collection: String,
-        listener: RealtimeListener<T>,
-        filter: String? = null,
-        serializer: KSerializer<T>? = null
-    ): () -> Unit {
-        val entry = TypedSubscriptionEntry(filter, listener, serializer)
-        scope.launch {
-            mutex.withLock {
-                val set = subscriptions.getOrPut(collection) { mutableSetOf() }
-                set.add(entry)
-                reconnectLocked()
-            }
+    fun dispatch(payload: JsonObject, json: Json) {
+        try {
+            val record = payload["record"] ?: return
+            listener(
+                RealtimeEvent(
+                    action = payload["op"]?.jsonPrimitive?.contentOrNull ?: "update",
+                    record = decodeRecord(json, serializer, record),
+                    collection = payload["collection"]?.jsonPrimitive?.contentOrNull ?: "",
+                    seq = payload["seq"]?.jsonPrimitive?.longOrNull
+                )
+            )
+        } catch (_: Throwable) {
+            // A bad payload or a throwing subscriber must not break the stream
         }
+    }
+}
 
-        return {
-            scope.launch {
-                mutex.withLock {
-                    val set = subscriptions[collection]
-                    if (set != null) {
-                        set.remove(entry)
-                        if (set.isEmpty()) {
-                            subscriptions.remove(collection)
-                        }
-                    }
-                    if (subscriptions.isEmpty()) {
-                        disconnectLocked()
-                    } else {
-                        reconnectLocked()
-                    }
+/** Client-side comparator for `-created,title` style sort strings. */
+internal fun sortComparator(sort: String?): Comparator<JsonObject>? {
+    val keys = sort?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }?.map {
+        if (it.startsWith("-")) it.substring(1) to -1 else it.removePrefix("+") to 1
+    } ?: return null
+    if (keys.isEmpty()) return null
+    return Comparator { a, b ->
+        for ((field, dir) in keys) {
+            val x = a[field]?.takeUnless { it is JsonNull } as? JsonPrimitive
+            val y = b[field]?.takeUnless { it is JsonNull } as? JsonPrimitive
+            val c = when {
+                x == null && y == null -> 0
+                x == null -> -1
+                y == null -> 1
+                else -> {
+                    val xn = if (x.isString) null else x.doubleOrNull
+                    val yn = if (y.isString) null else y.doubleOrNull
+                    if (xn != null && yn != null) xn.compareTo(yn) else x.content.compareTo(y.content)
                 }
             }
+            if (c != 0) return@Comparator c * dir
         }
+        0
+    }
+}
+
+/**
+ * One SSE connection with reconnect, backoff and resume (`since`, or a fresh snapshot).
+ * Commands are applied in call order (the lock is fair and taken before the launch suspends).
+ */
+internal class SseStream(
+    private val http: HttpClient,
+    private val scope: CoroutineScope,
+    /** A snapshot stream re-snapshots on reconnect instead of replaying. */
+    private val snapshot: Boolean,
+    private val params: suspend () -> Map<String, String>,
+    private val dispatch: suspend (event: String, payload: JsonObject) -> Unit
+) {
+    private val lock = Mutex()
+    private var job: Job? = null
+    private var stopped = true
+    private var lastSeq = 0L
+    private var attempts = 0
+
+    var connected = false
+        private set
+
+    fun start() = command {
+        stopped = false
+        spawn()
     }
 
-    /**
-     * Subscribes to change events in [collection] as a Kotlin [Flow].
-     */
-    fun <T> subscribeFlow(
-        collection: String,
-        filter: String? = null,
-        serializer: KSerializer<T>? = null
-    ): Flow<RealtimeEvent<T>> = callbackFlow {
-        val unsubscribe = subscribe(collection, { trySend(it) }, filter, serializer)
-        awaitClose { unsubscribe() }
+    /** Reopens now (the collection list changed). Keeps `lastSeq` so nothing is missed. */
+    fun restart() = command { if (!stopped) spawn() }
+
+    fun stop() = command {
+        stopped = true
+        job?.cancel()
+        job = null
+        attempts = 0
+        connected = false
     }
 
-    suspend fun disconnect() {
-        mutex.withLock {
-            disconnectLocked()
-        }
+    private fun command(block: () -> Unit) {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { lock.withLock { block() } }
     }
 
-    private fun disconnectLocked() {
-        streamJob?.cancel()
-        streamJob = null
-        isConnected = false
-        reconnectAttempts = 0
-    }
-
-    private fun reconnectLocked() {
-        if (subscriptions.isEmpty()) {
-            disconnectLocked()
-            return
-        }
-
-        streamJob?.cancel()
-        streamJob = scope.launch {
+    private fun spawn() {
+        val old = job
+        old?.cancel()
+        job = scope.launch {
+            old?.join()
             connectLoop()
         }
     }
 
     private suspend fun connectLoop() {
         while (currentCoroutineContext().isActive) {
-            val collectionsParam = mutex.withLock {
-                if (subscriptions.isEmpty()) return
-                subscriptions.keys.joinToString(",")
-            }
-
+            var resync = false
             try {
-                val path = "/api/v1/apps/${http.app}/realtime"
-                val url = http.buildUrl(path, mapOf("collections" to collectionsParam))
+                val query = mutableMapOf<String, Any?>().apply { putAll(params()) }
+                if (!snapshot && lastSeq > 0) query["since"] = lastSeq
+                val url = http.buildUrl("/api/v1/apps/${http.app}/realtime", query)
 
                 http.ktorClient.prepareGet(url) {
                     header(HttpHeaders.Accept, "text/event-stream")
                     header(HttpHeaders.CacheControl, "no-cache")
-
                     val authToken = http.getToken() ?: http.getApiKey()
                     if (authToken != null) {
                         header(HttpHeaders.Authorization, "Bearer $authToken")
@@ -187,35 +184,29 @@ class RealtimeService(
                     if (!response.status.isSuccess()) {
                         throw Exception("Realtime connection failed with HTTP ${response.status}")
                     }
-
-                    isConnected = true
-                    reconnectAttempts = 0
+                    connected = true
+                    attempts = 0
 
                     val channel = response.bodyAsChannel()
                     var currentEvent = "message"
                     val dataLines = mutableListOf<String>()
 
                     while (!channel.isClosedForRead && currentCoroutineContext().isActive) {
-                        val line = channel.readUTF8Line() ?: break
-                        val trimmed = line.trim()
-
+                        val trimmed = (channel.readUTF8Line() ?: break).trim()
                         if (trimmed.isEmpty()) {
                             // Empty line terminates an event block
                             if (dataLines.isNotEmpty()) {
-                                val fullData = dataLines.joinToString("\n")
+                                val data = dataLines.joinToString("\n")
                                 dataLines.clear()
-                                dispatchEvent(currentEvent, fullData)
-                                currentEvent = "message"
+                                if (handle(currentEvent, data)) {
+                                    resync = true
+                                    break
+                                }
                             }
-                            continue
-                        }
-
-                        if (trimmed.startsWith(":")) {
+                            currentEvent = "message"
+                        } else if (trimmed.startsWith(":")) {
                             // Ping / comment line, ignore
-                            continue
-                        }
-
-                        if (trimmed.startsWith("event:")) {
+                        } else if (trimmed.startsWith("event:")) {
                             currentEvent = trimmed.removePrefix("event:").trim()
                         } else if (trimmed.startsWith("data:")) {
                             dataLines.add(trimmed.removePrefix("data:").trim())
@@ -227,51 +218,263 @@ class RealtimeService(
             } catch (_: Throwable) {
                 // Connection lost or failed
             } finally {
-                isConnected = false
+                connected = false
             }
 
             if (!currentCoroutineContext().isActive) break
+            if (resync) continue // reconnect from scratch, no backoff
 
-            // Schedule reconnect with exponential backoff and jitter
-            val delayMs = min(500L * 2.0.pow(reconnectAttempts).toLong() + Random.nextLong(200L), 15000L)
-            reconnectAttempts++
+            val delayMs = min(500L * 2.0.pow(attempts).toLong() + Random.nextLong(200L), 15000L)
+            attempts++
             delay(delayMs)
         }
     }
 
-    private suspend fun dispatchEvent(eventName: String, data: String) {
-        if (data.isBlank()) return
-
-        try {
-            val jsonElement = http.json.parseToJsonElement(data)
-            if (jsonElement !is JsonObject) return
-
-            val op = jsonElement["op"]?.jsonPrimitive?.contentOrNull
-                ?: jsonElement["action"]?.jsonPrimitive?.contentOrNull
-                ?: "update"
-
-            val collection = jsonElement["collection"]?.jsonPrimitive?.contentOrNull
-                ?: (if (eventName != "record" && eventName != "message") eventName else "")
-
-            val record = jsonElement["record"] ?: jsonElement
-            val seq = jsonElement["seq"]?.jsonPrimitive?.longOrNull ?: 0L
-
-            val raw = RawRealtimePayload(
-                op = op,
-                collection = collection,
-                seq = seq,
-                record = record
-            )
-
-            val targets = mutex.withLock {
-                subscriptions[collection]?.toList() ?: emptyList()
-            }
-
-            for (target in targets) {
-                target.dispatch(raw, http.json)
-            }
+    /** Returns true when the server asked for a resync (the caller must reconnect). */
+    private suspend fun handle(event: String, data: String): Boolean {
+        val payload = try {
+            http.json.parseToJsonElement(data) as? JsonObject
         } catch (_: Throwable) {
-            // Ignore unparseable realtime event
+            null
+        } ?: return false
+
+        payload["seq"]?.jsonPrimitive?.longOrNull?.let { if (it > lastSeq) lastSeq = it }
+        if (event == "resync") {
+            // Missed more than the server keeps: start over.
+            lastSeq = 0
+            try {
+                dispatch(event, payload)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Throwable) {
+            }
+            return true
+        }
+        try {
+            dispatch(event, payload)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Throwable) {
+            // A listener must not break the stream
+        }
+        return false
+    }
+}
+
+/**
+ * Server-Sent Events (SSE) realtime service for subscribing to live record updates.
+ *
+ * Unfiltered subscriptions share one connection. A `filter`, `ids` or snapshot query opens a
+ * dedicated connection. After a reconnect the stream resumes from the last seen change.
+ */
+class RealtimeService(
+    private val http: HttpClient,
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+) {
+    private val mutex = Mutex()
+    private val listeners = mutableMapOf<String, MutableSet<SubscriptionEntry<*>>>()
+    private var shared: SseStream? = null
+    private var dedicated: List<SseStream> = emptyList()
+
+    fun isConnected(): Boolean = shared?.connected == true || dedicated.any { it.connected }
+
+    /**
+     * Subscribes a listener to change events in the given [collection].
+     * A non-empty [filter] or [ids] opens a dedicated connection with server-side filtering.
+     * Returns an unsubscribe function.
+     */
+    fun <T> subscribe(
+        collection: String,
+        listener: RealtimeListener<T>,
+        filter: String? = null,
+        ids: List<String>? = null,
+        serializer: KSerializer<T>? = null
+    ): () -> Unit {
+        val entry = SubscriptionEntry(listener, serializer)
+
+        if (!filter.isNullOrEmpty() || !ids.isNullOrEmpty()) {
+            val stream = SseStream(
+                http, scope, snapshot = false,
+                params = {
+                    buildMap {
+                        put("collections", collection)
+                        if (!filter.isNullOrEmpty()) put("filter.$collection", filter)
+                        if (!ids.isNullOrEmpty()) put("ids.$collection", ids.joinToString(","))
+                    }
+                },
+                dispatch = { ev, p -> if (ev == "record") entry.dispatch(p, http.json) }
+            )
+            return startDedicated(stream)
+        }
+
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            mutex.withLock {
+                val fresh = !listeners.containsKey(collection)
+                listeners.getOrPut(collection) { mutableSetOf() }.add(entry)
+                val current = shared
+                if (current == null) {
+                    shared = newSharedStream().also { it.start() }
+                } else if (fresh) {
+                    current.restart()
+                }
+            }
+        }
+
+        return {
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                mutex.withLock {
+                    val set = listeners[collection]
+                    set?.remove(entry)
+                    if (set != null && set.isEmpty()) listeners.remove(collection)
+                    if (listeners.isEmpty()) {
+                        shared?.stop()
+                        shared = null
+                    } else if (set != null && set.isEmpty()) {
+                        shared?.restart()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun newSharedStream() = SseStream(
+        http, scope, snapshot = false,
+        params = { mutex.withLock { mapOf("collections" to listeners.keys.joinToString(",")) } },
+        dispatch = { ev, p ->
+            if (ev == "record") {
+                val c = p["collection"]?.jsonPrimitive?.contentOrNull
+                val targets = mutex.withLock { listeners[c]?.toList() }.orEmpty()
+                for (t in targets) t.dispatch(p, http.json)
+            }
+        }
+    )
+
+    private fun startDedicated(stream: SseStream): () -> Unit {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            mutex.withLock { dedicated = dedicated + stream }
+            stream.start()
+        }
+        return {
+            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                mutex.withLock { dedicated = dedicated - stream }
+                stream.stop()
+            }
+        }
+    }
+
+    /**
+     * Subscribes to change events in [collection] as a Kotlin [Flow].
+     */
+    fun <T> subscribeFlow(
+        collection: String,
+        filter: String? = null,
+        ids: List<String>? = null,
+        serializer: KSerializer<T>? = null
+    ): Flow<RealtimeEvent<T>> = callbackFlow {
+        val unsubscribe = subscribe(collection, { trySend(it) }, filter, ids, serializer)
+        awaitClose { unsubscribe() }
+    }
+
+    /**
+     * Firestore-style query listener: calls back with the current result set, then again after
+     * every change that affects it. Reconnects re-snapshot, so the view always converges.
+     * Returns an unsubscribe function.
+     */
+    fun <T> onSnapshot(
+        collection: String,
+        callback: (QuerySnapshot<T>) -> Unit,
+        options: SnapshotOptions = SnapshotOptions(),
+        serializer: KSerializer<T>? = null
+    ): () -> Unit {
+        val docs = LinkedHashMap<String, JsonObject>()
+        val cmp = sortComparator(options.sort)
+        val json = http.json
+
+        fun ordered(): List<JsonObject> = docs.values.toList().let { if (cmp != null) it.sortedWith(cmp) else it }
+        fun idOf(o: JsonObject) = o["id"]?.jsonPrimitive?.contentOrNull
+
+        val stream = SseStream(
+            http, scope, snapshot = true,
+            params = {
+                buildMap {
+                    put("collections", collection)
+                    put("snapshot", options.limit.toString())
+                    if (!options.filter.isNullOrEmpty()) put("filter.$collection", options.filter)
+                    if (!options.sort.isNullOrEmpty()) put("sort.$collection", options.sort)
+                }
+            },
+            dispatch = dispatch@{ ev, p ->
+                val changes = mutableListOf<Pair<DocumentChangeType, JsonObject>>()
+                when (ev) {
+                    "snapshot" -> {
+                        val next = LinkedHashMap<String, JsonObject>()
+                        (p["items"] as? JsonArray)?.forEach { el ->
+                            val o = el as? JsonObject ?: return@forEach
+                            idOf(o)?.let { next[it] = o }
+                        }
+                        for ((id, d) in next) {
+                            changes += (if (docs.containsKey(id)) DocumentChangeType.MODIFIED else DocumentChangeType.ADDED) to d
+                        }
+                        for ((id, d) in docs) if (!next.containsKey(id)) changes += DocumentChangeType.REMOVED to d
+                        docs.clear()
+                        docs.putAll(next)
+                    }
+                    "record" -> {
+                        val rec = p["record"] as? JsonObject ?: return@dispatch
+                        val id = idOf(rec) ?: return@dispatch
+                        val op = p["op"]?.jsonPrimitive?.contentOrNull
+                        if (op == "delete" || op == "leave") {
+                            val old = docs.remove(id) ?: return@dispatch
+                            changes += DocumentChangeType.REMOVED to old
+                        } else {
+                            changes += (if (docs.containsKey(id)) DocumentChangeType.MODIFIED else DocumentChangeType.ADDED) to rec
+                            docs[id] = rec
+                        }
+                    }
+                    "error" -> {
+                        val msg = p["message"]?.jsonPrimitive?.contentOrNull ?: "realtime error"
+                        try {
+                            options.onError?.invoke(Exception(msg))
+                        } catch (_: Throwable) {
+                        }
+                        return@dispatch
+                    }
+                    else -> return@dispatch
+                }
+                try {
+                    callback(
+                        QuerySnapshot(
+                            docs = ordered().map { decodeRecord(json, serializer, it) },
+                            changes = changes.map { (t, d) -> DocumentChange(t, decodeRecord(json, serializer, d)) }
+                        )
+                    )
+                } catch (_: Throwable) {
+                    // A listener must not break the stream
+                }
+            }
+        )
+        return startDedicated(stream)
+    }
+
+    /**
+     * [onSnapshot] as a Kotlin [Flow]. Server `error` events go to [SnapshotOptions.onError].
+     */
+    fun <T> onSnapshotFlow(
+        collection: String,
+        options: SnapshotOptions = SnapshotOptions(),
+        serializer: KSerializer<T>? = null
+    ): Flow<QuerySnapshot<T>> = callbackFlow {
+        val off = onSnapshot<T>(collection, { trySend(it) }, options, serializer)
+        awaitClose { off() }
+    }
+
+    suspend fun disconnect() {
+        mutex.withLock {
+            shared?.stop()
+            shared = null
+            listeners.clear()
+            dedicated.forEach { it.stop() }
+            dedicated = emptyList()
         }
     }
 }

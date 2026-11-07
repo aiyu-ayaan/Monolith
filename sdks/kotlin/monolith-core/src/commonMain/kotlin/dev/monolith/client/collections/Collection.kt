@@ -7,9 +7,12 @@ import dev.monolith.client.http.ListResult
 import dev.monolith.client.http.RecordModel
 import dev.monolith.client.realtime.RealtimeEvent
 import dev.monolith.client.realtime.RealtimeListener
+import dev.monolith.client.realtime.QuerySnapshot
 import dev.monolith.client.realtime.RealtimeService
+import dev.monolith.client.realtime.SnapshotOptions
 import io.ktor.http.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.serializer
@@ -179,26 +182,57 @@ class Collection<T>(
 
     /**
      * Subscribes a callback to change events for this collection.
-     * Returns an unsubscribe function.
+     * A [filter] or [ids] opens a dedicated server-filtered connection; `leave` events report
+     * records that stopped matching. Returns an unsubscribe function.
      */
     fun subscribe(
         listener: RealtimeListener<T>,
-        filter: String? = null
-    ): () -> Unit {
-        val rt = realtime ?: throw IllegalStateException("RealtimeService is not available on this client instance.")
-        return rt.subscribe(name, listener, filter, serializer)
-    }
+        filter: String? = null,
+        ids: List<String>? = null
+    ): () -> Unit = rt().subscribe(name, listener, filter, ids, serializer)
 
     /**
      * Subscribes to change events for this collection as a Kotlin [Flow].
      */
-    fun subscribe(filter: String? = null): Flow<RealtimeEvent<T>> {
-        val rt = realtime ?: throw IllegalStateException("RealtimeService is not available on this client instance.")
-        return rt.subscribeFlow(name, filter, serializer)
-    }
+    fun subscribe(filter: String? = null, ids: List<String>? = null): Flow<RealtimeEvent<T>> =
+        rt().subscribeFlow(name, filter, ids, serializer)
 
     /**
      * Subscribes to change events for this collection as a Kotlin [Flow].
      */
-    fun subscribeFlow(filter: String? = null): Flow<RealtimeEvent<T>> = subscribe(filter)
+    fun subscribeFlow(filter: String? = null, ids: List<String>? = null): Flow<RealtimeEvent<T>> =
+        subscribe(filter, ids)
+
+    /**
+     * Firestore-style listener: the current result set first, then a new [QuerySnapshot] after
+     * every change. Narrow it with [SnapshotOptions]. Returns the unsubscribe function.
+     */
+    fun onSnapshot(
+        callback: (QuerySnapshot<T>) -> Unit,
+        options: SnapshotOptions = SnapshotOptions()
+    ): () -> Unit = rt().onSnapshot(name, callback, options, serializer)
+
+    /**
+     * [onSnapshot] as a [Flow]. Server errors go to [SnapshotOptions.onError].
+     */
+    fun onSnapshot(options: SnapshotOptions = SnapshotOptions()): Flow<QuerySnapshot<T>> =
+        rt().onSnapshotFlow(name, options, serializer)
+
+    /**
+     * Listens to one record: calls back with it, or `null` once it is deleted or no longer visible.
+     */
+    fun onDocSnapshot(id: String, callback: (T?) -> Unit, onError: ((Throwable) -> Unit)? = null): () -> Unit =
+        onSnapshot(
+            { callback(it.docs.firstOrNull()) },
+            SnapshotOptions(filter = "id = '${id.replace("'", "")}'", limit = 1, onError = onError)
+        )
+
+    /**
+     * [onDocSnapshot] as a [Flow] of the record, or `null` when it is gone.
+     */
+    fun onDocSnapshot(id: String): Flow<T?> =
+        onSnapshot(SnapshotOptions(filter = "id = '${id.replace("'", "")}'", limit = 1)).map { it.docs.firstOrNull() }
+
+    private fun rt(): RealtimeService =
+        realtime ?: throw IllegalStateException("RealtimeService is not available on this client instance.")
 }
