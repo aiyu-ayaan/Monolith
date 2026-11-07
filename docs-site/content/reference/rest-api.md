@@ -1,6 +1,7 @@
 ---
 title: REST API
 description: Every endpoint of the v1 API, grouped, with the roles that may call it.
+group: API
 order: 10
 ---
 

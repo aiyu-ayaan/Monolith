@@ -57,7 +57,7 @@ export const PAGES: Page[] = Object.entries(files)
       body,
     } satisfies Page;
   })
-  .filter((p) => AREAS.some((a) => a.id === p.area))
+  .filter((p) => AREAS.some((a) => a.id === p.area) && !p.path.split("/").pop()!.startsWith("_"))
   .sort((a, b) => a.order - b.order || a.title.localeCompare(b.title));
 
 const byPath = new Map(PAGES.map((p) => [p.path, p]));

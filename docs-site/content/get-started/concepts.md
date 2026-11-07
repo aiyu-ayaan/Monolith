@@ -1,6 +1,7 @@
 ---
 title: Concepts
 description: The words Monolith uses: apps, collections, records, IDs, the change log, rules and the data directory.
+group: Basics
 order: 20
 ---
 

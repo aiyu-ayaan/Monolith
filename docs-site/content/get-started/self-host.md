@@ -1,6 +1,7 @@
 ---
 title: Self-hosting
 description: Build and run the server, create the first superuser, set environment variables and put a reverse proxy in front.
+group: Basics
 order: 30
 ---
 

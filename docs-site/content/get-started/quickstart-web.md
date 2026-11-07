@@ -1,6 +1,7 @@
 ---
 title: Quickstart for web apps
 description: Connect a browser app with the TypeScript SDK, sign a user in, write records and listen for live changes.
+group: Quickstarts
 order: 50
 ---
 

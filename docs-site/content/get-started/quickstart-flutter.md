@@ -1,6 +1,7 @@
 ---
 title: Quickstart for Flutter and Dart
 description: Connect a Flutter app with the Dart SDK, sign in, write records and bind a live snapshot Stream to your UI.
+group: Quickstarts
 order: 70
 ---
 

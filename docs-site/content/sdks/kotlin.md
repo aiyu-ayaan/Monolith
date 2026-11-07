@@ -16,23 +16,6 @@ val mono = Monolith.init(context, url = "https://api.example.com", app = "shop")
 
 The session lives in `EncryptedSharedPreferences` (private preferences if the Keystore fails). The default redirect is `monolith-shop://auth`. Declare `MonolithAuthRedirectActivity` with that scheme in your manifest and add the URI to the app's allowed redirect URLs.
 
-## Auth
-
-```kotlin
-mono.auth.signIn("ada@example.com", "correct horse")
-mono.auth.state.collect { s -> /* AuthState.Unknown | SignedOut | SignedIn(user) */ }
-mono.auth.signInWithProvider("google")   // opens a Custom Tab
-mono.auth.signOut()
-```
-
-## Data
-
-```kotlin
-val tasks = mono.collection<Task>("tasks")
-val page = tasks.list(ListOptions(filter = "done = false", limit = 20))
-tasks.onSnapshot().collect { snap -> render(snap.docs) }
-```
-
 ## Compose
 
 ```kotlin
@@ -40,6 +23,10 @@ setContent { AuthGate(mono) { Home(mono) } }
 ```
 
 `MonolithAuth`, `rememberAuthController`, `AuthUiOptions`, `UserChip`, `SignOutButton` are in `monolith-compose`.
+
+## Auth, data, files and realtime
+
+These work the same in every language and live on shared pages: [Authentication](/sdks/auth), [Read and query](/sdks/query), [Write data](/sdks/write), [Realtime](/sdks/realtime) and [Storage](/sdks/storage).
 
 ## Limits and status
 

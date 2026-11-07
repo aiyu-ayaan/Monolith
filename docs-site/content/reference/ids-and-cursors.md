@@ -1,6 +1,7 @@
 ---
 title: IDs and cursors
 description: Record id format, timestamps, versions and pagination cursors.
+group: API
 order: 30
 ---
 

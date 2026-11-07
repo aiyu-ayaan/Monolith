@@ -16,16 +16,9 @@ runApp(MaterialApp(home: AuthGate(client: mono, child: const Home())));
 
 Pure Dart: `await Monolith.init(url: ..., app: ...)`, with memory storage unless you pass a `SessionStorage`. Provider sign-in redirects to `monolith-<app>://auth` by default; register that scheme and add it to the allowed redirect URLs.
 
-## Auth and data
+## Auth, data, files and realtime
 
-```dart
-await mono.auth().signIn('ada@example.com', 'correct horse');
-mono.auth().changes.listen((s) => print(s)); // AuthUnknown | AuthSignedOut | AuthSignedIn
-final page = await mono.collection('tasks').list(filter: 'done = false', limit: 20);
-mono.collection('tasks').onSnapshot().listen((snap) => render(snap.docs));
-```
-
-Widgets: `MonolithAuthScreen`, `AuthGate`, `AuthBuilder` (headless), `UserChip`, `SignOutButton`.
+These work the same in every language and live on shared pages: [Authentication](/sdks/auth), [Read and query](/sdks/query), [Write data](/sdks/write), [Realtime](/sdks/realtime) and [Storage](/sdks/storage).
 
 ## Limits and status
 

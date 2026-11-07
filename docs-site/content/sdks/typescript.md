@@ -22,28 +22,6 @@ const mono = Monolith.init({ url: location.origin, app: "shop" });
 | `redirectUri` | Default return URL for provider sign-in |
 | `fetch`, `headers` | Custom transport |
 
-## Auth
-
-```ts
-await mono.auth.signUp({ email, password, name });
-await mono.auth.signIn({ email, password });
-await mono.auth.signInWithProvider("google");          // { mode: "popup" } resolves with the user
-const off = mono.auth.onChange((s) => console.log(s.status, s.user)); // unknown | signedOut | signedIn
-const token = await mono.auth.accessToken();           // refreshes first if needed
-await mono.auth.signOut();
-```
-
-Also `getProviders()`, `updateProfile({name})`, `changePassword(old, new)`, `handleRedirect()`. `Monolith.init` handles a provider redirect in the URL by itself and removes the fragment.
-
-## Data
-
-```ts
-const tasks = mono.collection("tasks");
-const page = await tasks.list({ filter: "done = false", sort: "-created", limit: 20 });
-await tasks.create({ title: "Hi" });
-tasks.onSnapshot((snap) => render(snap.docs), { filter: "done = false" });
-```
-
 ## React
 
 ```tsx
@@ -51,6 +29,10 @@ import { AuthGate, useAuth } from "@monolith/client/react";
 const { user, signOut } = useAuth(mono);
 <AuthGate mono={mono}><App /></AuthGate>
 ```
+
+## Auth, data, files and realtime
+
+These work the same in every language and live on shared pages: [Authentication](/sdks/auth), [Read and query](/sdks/query), [Write data](/sdks/write), [Realtime](/sdks/realtime) and [Storage](/sdks/storage).
 
 ## Limits and status
 

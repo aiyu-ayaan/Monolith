@@ -127,9 +127,12 @@ export function render(md: string): { html: string; headings: Heading[] } {
   const used = new Map<string, number>();
   const r = new Renderer();
   r.heading = function ({ tokens, depth }) {
-    const text = this.parser.parseInline(tokens);
+    let text = this.parser.parseInline(tokens);
+    // `## Title {#custom-id}` sets the anchor by hand.
+    const custom = /\s*\{#([\w-]+)\}\s*$/.exec(text);
+    if (custom) text = text.slice(0, custom.index);
     const plain = text.replace(/<[^>]+>/g, "");
-    let id = slug(plain) || "section";
+    let id = custom?.[1] ?? (slug(plain) || "section");
     const n = used.get(id) ?? 0;
     used.set(id, n + 1);
     if (n) id += `-${n}`;

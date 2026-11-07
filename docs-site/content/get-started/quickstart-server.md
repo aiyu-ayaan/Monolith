@@ -1,6 +1,7 @@
 ---
 title: Quickstart for servers and scripts
 description: Create an app and a collection, then read and write records from curl, Python or Rust.
+group: Quickstarts
 order: 40
 ---
 

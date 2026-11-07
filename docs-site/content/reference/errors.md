@@ -1,6 +1,7 @@
 ---
 title: Errors
 description: The problem+json error shape, status codes and what to do for each.
+group: API
 order: 20
 ---
 

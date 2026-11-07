@@ -1,6 +1,7 @@
 ---
 title: Quickstart for Android
 description: Connect an Android app with the Kotlin SDK, sign in, write records and collect live snapshots as a Flow.
+group: Quickstarts
 order: 60
 ---
 

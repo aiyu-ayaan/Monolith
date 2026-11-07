@@ -1,6 +1,7 @@
 ---
 title: What is Monolith
 description: A self-hosted backend for many apps in one Rust process and one data directory.
+group: Basics
 order: 10
 ---
 

@@ -1,6 +1,7 @@
 ---
 title: Rules syntax
 description: Operators, variables and macros for rules and filters.
+group: Limits and syntax
 order: 50
 ---
 

@@ -1,6 +1,7 @@
 ---
 title: Limits
 description: Hard limits of the server as implemented today.
+group: Limits and syntax
 order: 40
 ---
 
