@@ -5,11 +5,11 @@ import { fmtBytes, fmtClock, fmtHour, fmtNum, fmtUptime, fmtUs, LineChart } from
 import { fmtDate, Icon } from "../ui";
 import ErrorBox from "./ErrorBox";
 
-type Range = "1h" | "48h";
+export type Range = "1h" | "48h";
 const POLL_MS = 5000;
 
 /** Refetches every 5 s while on and the tab is visible. */
-function usePoll(refetch: () => void) {
+export function usePoll(refetch: () => void) {
   const [on, setOn] = createSignal(true);
   const id = setInterval(() => on() && document.visibilityState === "visible" && refetch(), POLL_MS);
   onCleanup(() => clearInterval(id));
@@ -31,7 +31,7 @@ function sumRange(pts: TrafficPoint[]): Traffic {
 
 const pct = (a: number, b: number) => (b ? `${+((a / b) * 100).toFixed(2)}%` : "0%");
 
-function Tile(p: { label: string; value: string; sub?: JSX.Element; tone?: "critical" }) {
+export function Tile(p: { label: string; value: string; sub?: JSX.Element; tone?: "critical" }) {
   return (
     <div class="tile">
       <p class="tile-label">{p.label}</p>
@@ -48,7 +48,7 @@ function Tile(p: { label: string; value: string; sub?: JSX.Element; tone?: "crit
   );
 }
 
-function Toolbar(p: { range: Range; setRange: (r: Range) => void; live: boolean; setLive: (b: boolean) => void; refetch: () => void; loading: boolean }) {
+export function Toolbar(p: { range: Range; setRange: (r: Range) => void; live: boolean; setLive: (b: boolean) => void; refetch: () => void; loading: boolean }) {
   return (
     <div class="actions">
       <div class="seg" role="group" aria-label="Time range">
@@ -72,7 +72,7 @@ function Toolbar(p: { range: Range; setRange: (r: Range) => void; live: boolean;
 }
 
 /** Tiles + charts for one traffic series, scoped to the selected range. */
-function TrafficPanel(p: { traffic: TrafficSeries; range: Range }) {
+export function TrafficPanel(p: { traffic: TrafficSeries; range: Range }) {
   const pts = () => (p.range === "1h" ? p.traffic.minutes : p.traffic.hours);
   const r = createMemo(() => sumRange(pts()));
   const tf = () => (p.range === "1h" ? fmtClock : fmtHour);

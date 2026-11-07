@@ -4,6 +4,7 @@ import { api, enc, ready, type ApiError, type Collection } from "../api";
 import { Icon, toast } from "../ui";
 import ErrorBox from "./ErrorBox";
 import SchemaEditor from "./SchemaEditor";
+import AppDashboard from "./AppDashboard";
 
 interface AppCtx {
   collections: Resource<{ items: Collection[] }>;
@@ -28,6 +29,8 @@ export default function AppLayout(props: RouteSectionProps) {
   const shown = () => (ready(cols)?.items ?? []).filter((c) => c.name.includes(q().trim().toLowerCase()));
   const appPath = () => `/apps/${enc(params.app!)}`;
   const onAnalytics = () => loc.pathname.endsWith("/analytics");
+  const onAuth = () => loc.pathname.endsWith("/auth");
+  const onOverview = () => loc.pathname === appPath() || loc.pathname === `${appPath()}/`;
 
   return (
     <Ctx.Provider value={{ collections: cols, editSchema: (c) => setEditing({ c }) }}>
@@ -48,6 +51,18 @@ export default function AppLayout(props: RouteSectionProps) {
           <ErrorBox error={cols.error as ApiError | undefined} />
           <nav class="side-nav">
             <ul>
+              <li>
+                <a href={`#${appPath()}`} classList={{ active: onOverview() }} aria-current={onOverview() ? "page" : undefined}>
+                  <Icon name="home" size={16} />
+                  <span>Overview</span>
+                </a>
+              </li>
+              <li>
+                <a href={`#${appPath()}/auth`} classList={{ active: onAuth() }} aria-current={onAuth() ? "page" : undefined}>
+                  <Icon name="key" size={16} />
+                  <span>Authentication</span>
+                </a>
+              </li>
               <li>
                 <a href={`#${appPath()}/analytics`} classList={{ active: onAnalytics() }} aria-current={onAnalytics() ? "page" : undefined}>
                   <Icon name="chart" size={16} />
@@ -108,18 +123,6 @@ export default function AppLayout(props: RouteSectionProps) {
 
 export function AppHome() {
   const ctx = useApp();
-  const none = () => !ctx.collections.loading && !ctx.collections.error && !ready(ctx.collections)?.items.length;
-  return (
-    <div class="empty full">
-      <Icon name="folder" size={32} />
-      <h2>{none() ? "No collections yet" : "Select a collection"}</h2>
-      <p class="muted">{none() ? "A collection is a table with typed fields and access rules." : "Pick one from the sidebar to browse its records."}</p>
-      <Show when={none()}>
-        <button class="btn" onClick={() => ctx.editSchema(null)}>
-          <Icon name="plus" />
-          New collection
-        </button>
-      </Show>
-    </div>
-  );
+  const params = useParams();
+  return <AppDashboard app={params.app!} editSchema={() => ctx.editSchema(null)} />;
 }

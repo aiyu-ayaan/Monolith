@@ -9,6 +9,7 @@ import Apps from "./pages/Apps";
 import AppLayout, { AppHome } from "./pages/AppLayout";
 import { AppAnalytics, SystemAnalytics } from "./pages/Analytics";
 import Records from "./pages/Records";
+import Auth from "./pages/Auth";
 import "./styles.css";
 
 function Shell(props: RouteSectionProps) {
@@ -21,7 +22,7 @@ function Shell(props: RouteSectionProps) {
           <a href="#/" class="logo" aria-label="Monolith home">
             <Icon name="logo" size={22} />
           </a>
-          <a href="#/" class="rail-btn" classList={{ active: !isAnalytics() }} aria-label="Apps" title="Apps">
+          <a href="#/" class="rail-btn" classList={{ active: !isAnalytics() }} aria-label="Dashboard" title="Dashboard">
             <Icon name="layers" />
           </a>
           <a href="#/analytics" class="rail-btn" classList={{ active: isAnalytics() }} aria-label="Analytics" title="Analytics">
@@ -50,6 +51,7 @@ render(
           <Route path="/apps/:app" component={AppLayout}>
             <Route path="/" component={AppHome} />
             <Route path="/analytics" component={AppAnalytics} />
+            <Route path="/auth" component={Auth} />
             <Route path="/c/:coll" component={Records} />
           </Route>
         </Route>
