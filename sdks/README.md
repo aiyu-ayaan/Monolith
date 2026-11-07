@@ -45,20 +45,18 @@ sdks/<lang>/
 └── errors        # RFC 9457 problem+json error mapping
 ```
 
-### Quick Usage Example (TypeScript)
+### Quick Usage Examples
 
+#### TypeScript
 ```ts
 import { createClient } from "@monolith/client";
 
-const mono = createClient({
-  url: "http://localhost:8090",
-  app: "default",
-});
+const mono = createClient({ url: "http://localhost:8090", app: "default" });
 
 // Authenticate
 await mono.auth("users").signInWithPassword("alice@example.com", "secret123");
 
-// Query collection
+// Database collection queries
 const tasks = await mono.collection("tasks").list({
   filter: "status = 'active'",
   sort: "-created",
@@ -73,4 +71,84 @@ const unsubscribe = mono.collection("tasks").subscribe((event) => {
 // Storage uploads & thumbnails
 await mono.files.upload("receipts", "task_1.png", fileBlob);
 const thumbUrl = mono.files.getURL("receipts", "task_1.png", { thumb: "200x200" });
+```
+
+#### Kotlin / Android
+```kotlin
+import dev.monolith.android.MonolithAndroid
+
+// Android initialization with auto EncryptedSharedPreferences token storage
+val mono = MonolithAndroid.builder(context)
+    .url("http://10.0.2.2:8090")
+    .app("default")
+    .build()
+
+// Authenticate
+mono.auth("users").signInWithPassword("alice@example.com", "secret123")
+
+// Database query
+val tasks = mono.collection("tasks").list(filter = "status = 'active'", limit = 20)
+
+// Realtime Flow subscription
+mono.collection("tasks").subscribeAsFlow().collect { event ->
+    println("Task ${event.action}: ${event.record}")
+}
+
+// Storage upload
+mono.files.upload("receipts", "task_1.png", byteArray)
+```
+
+#### Python
+```python
+from monolith import create_client
+
+client = create_client(url="http://localhost:8090", app="default")
+
+# Authenticate
+client.auth("users").sign_in_with_password("alice@example.com", "secret123")
+
+# Database query
+tasks = client.collection("tasks").list(filter="status = 'active'", limit=20)
+
+# Storage upload & URL
+client.files.upload("receipts", "task_1.png", b"file bytes")
+thumb_url = client.files.get_url("receipts", "task_1.png", thumb="200x200")
+```
+
+#### Dart / Flutter
+```dart
+import 'package:monolith_client/monolith_client.dart';
+
+final mono = createClient(url: 'http://localhost:8090', app: 'default');
+
+// Authenticate
+await mono.auth('users').signInWithPassword('alice@example.com', 'secret123');
+
+// Database query
+final tasks = await mono.collection('tasks').list(filter: "status = 'active'", limit: 20);
+
+// Realtime SSE stream
+final unsub = mono.collection('tasks').subscribe((event) {
+  print('Task ${event.action}: ${event.record}');
+});
+```
+
+#### Rust
+```rust
+use monolith_client::Client;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::builder("http://localhost:8090")
+        .app("default")
+        .build()?;
+
+    // Authenticate
+    client.auth("users").sign_in_with_password("alice@example.com", "secret123").await?;
+
+    // Database query
+    let tasks = client.collection("tasks").list().filter("status = 'active'").limit(20).send().await?;
+
+    Ok(())
+}
 ```

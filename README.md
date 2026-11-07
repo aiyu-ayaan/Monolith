@@ -40,7 +40,7 @@ Progress & roadmap: [`development/TODO.md`](development/TODO.md) and [`developme
 flowchart LR
     subgraph Clients
         UI["Admin UI (/_/)<br/>SolidJS + TypeScript"]
-        TS["TypeScript SDK<br/>@monolith/client"]
+        SDKs["Client SDKs<br/>TS · Dart · Kotlin/Android · Python · Rust"]
         Agents["AI Agents & CLI<br/>curl · OpenAPI · SKILL.md"]
     end
 
@@ -73,7 +73,7 @@ flowchart LR
     SysDB[("SQLite<br/>data/system.db")]
     AppDB[("SQLite (WAL, STRICT)<br/>data/apps/{app}/data.db")]
 
-    UI & TS & Agents -->|"HTTP/1.1, h2 (JSON / problem+json)"| Router
+    UI & SDKs & Agents -->|"HTTP/1.1, h2 (JSON / problem+json)"| Router
     Sys --> SysDB
     Writer --> AppDB
     Readers --> AppDB
@@ -271,6 +271,59 @@ curl -s -X POST http://127.0.0.1:8090/api/v1/apps/blog/debug/query:explain \
 
 See [`agent-skills/monolith-rest/SKILL.md`](agent-skills/monolith-rest/SKILL.md) and [`agent-skills/monolith-debug/SKILL.md`](agent-skills/monolith-debug/SKILL.md) for the complete endpoint reference, filter syntax, relation `expand`, `ETag`/`If-Match` concurrency control, and batch transactions.
 
+## Client libraries & SDKs
+
+Monolith provides official native client libraries sharing a consistent interface across platforms. Full documentation and guides live in [`sdks/README.md`](sdks/README.md).
+
+### Features supported across SDKs
+
+| Domain | Supported features |
+|---|---|
+| **Database & Collections** | Typed CRUD (`list`, `getOne`, `create`, `update`, `replace`, `delete`), record counts (`count`), keyset pagination (`cursor`, `perPage`), sorting (`sort`), filtering expressions (`filter`), column projection (`fields`), relation joins (`expand`), and atomic multi-operation `:batch`. |
+| **Authentication** | Email & password login, first-superuser installer bootstrap, token persistence, session change observers (`onChange` / reactive streams), and scoped API key headers. |
+| **Storage & Buckets** | Bucket management, direct/streamed file uploads, download URL generation with on-demand image thumbnails (`?thumb=WxH`), and object deletion. |
+| **Realtime** | Multiplexed Server-Sent Events (SSE) streaming (`/api/v1/apps/{app}/realtime`), per-collection subscriptions, and automatic exponential backoff reconnection with jitter. |
+| **Analytics** | Asynchronous in-memory event tracking (`track`), automated periodic and size-bounded batch flushing (`flush`), and retry buffering. |
+| **Error Handling** | RFC 9457 `application/problem+json` mapped to typed native exceptions with HTTP status codes, problem types, request IDs (`X-Request-Id`), and granular field-level validation errors. |
+
+### Language support & registries
+
+| Language | Package / Registry | Target platforms | Status |
+|---|---|---|---|
+| **TypeScript** | [`@monolith/client`](sdks/typescript) (npm) | Web browsers, Node >= 20, Bun, Deno, React Native | v0 implemented |
+| **Dart** | [`monolith_client`](sdks/dart) (pub.dev) | Flutter (Android, iOS, desktop, web) | v0 implemented |
+| **Kotlin / Android** | [`dev.monolith:monolith-core`, `monolith-android`](sdks/kotlin) (Maven) | Android (AAR), JVM, Kotlin Multiplatform | v0 implemented |
+| **Python** | [`monolith-client`](sdks/python) (PyPI) | Python >= 3.10 (httpx), automation scripts, workers | v0 implemented |
+| **Rust** | [`monolith-client`](sdks/rust) (crates.io) | Rust CLI tools, background workers, microservices | v0 implemented |
+| **Swift** | [`Monolith`](sdks/swift) (SwiftPM) | iOS, macOS, watchOS, visionOS | Planned (Phase 5) |
+
+### SDK usage example
+
+```ts
+import { createClient } from "@monolith/client";
+
+const mono = createClient({ url: "http://localhost:8090", app: "blog" });
+
+// 1. Authentication
+await mono.auth("users").signInWithPassword("alice@example.com", "secret123");
+
+// 2. Database queries with filters, sorts & pagination
+const posts = await mono.collection("posts").list({
+  filter: "views >= 10 && status = 'pub'",
+  sort: "-created",
+  limit: 20,
+});
+
+// 3. Realtime collection subscriptions
+const unsubscribe = mono.collection("posts").subscribe((event) => {
+  console.log("Post changed:", event.action, event.record);
+});
+
+// 4. File uploads & thumbnail generation
+await mono.files.upload("covers", "post_1.png", fileBlob);
+const thumbUrl = mono.files.getURL("covers", "post_1.png", { thumb: "300x200" });
+```
+
 ## Repository layout
 
 ```text
@@ -283,7 +336,13 @@ crates/
   monolith-core/            Registry (system.db), AppRuntime (data.db), schema migrations, records CRUD, debug/explain
   monolith-server/          Axum HTTP server, RFC 9457 errors, tracing headers, embedded Admin UI
 bench/harness/              Phase 0 engine bake-off harness and Criterion micro-benchmarks
-sdks/typescript/            @monolith/client TypeScript SDK (zero runtime dependencies)
+sdks/
+  typescript/               @monolith/client (npm): Web, Node >= 20, Bun, Deno, React Native
+  dart/                     monolith_client (pub.dev): Flutter for Android, iOS, desktop, web
+  kotlin/                   dev.monolith:monolith-core + monolith-android (Maven)
+  python/                   monolith-client (PyPI): httpx-based client for Python 3.10+
+  rust/                     monolith-client (crates.io): reqwest-based client crate
+  swift/                    Monolith (SwiftPM): native Apple platforms
 ui/                         SolidJS + Vite + TypeScript Admin UI
 examples/                   Runnable curl and web-typescript examples
 development/                22 architecture & design docs (development/docs/) and TODO.md
