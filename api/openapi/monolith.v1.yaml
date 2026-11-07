@@ -783,12 +783,17 @@ paths:
       operationId: realtime
       description: |
         Server-Sent Events stream of record changes (doc 07). Events: `hello` (`{conn, hb}`),
-        `record` (`{op: create|update|delete, collection, seq, record}`, SSE `id` = seq),
-        `resync` (`{reason}`: refetch), plus `: hb` comments every `hb` seconds.
+        `snapshot` (`{collection, seq, items, next}`, only with `snapshot=`),
+        `record` (`{op: create|update|delete|leave, collection, seq, record}`, SSE `id` = seq),
+        `resync` (`{reason}`: refetch), `error` (`{collection, message}`), plus `: hb` comments every `hb` seconds.
         A `record` event carries the row as it is when dispatched, so rapid writes coalesce.
+        `leave` means the record stopped matching the topic's filter or the view rule (it was not deleted).
+        A narrowed topic (`filter.<c>` or `ids.<c>`) remembers up to 50 000 records it showed, so it
+        can send `leave` and deliver their deletes. One topic per collection per connection.
         Superusers see everything including hidden fields. Others need a non-relational view
-        rule and receive only rows it allows; `delete` events reach them only when the view
-        rule is public. A slow client (256 queued frames) is dropped and must reconnect and refetch.
+        rule and receive only rows it allows; on untracked topics `delete` events reach them only
+        when the view rule is public. A slow client (256 queued frames) is dropped and must reconnect.
+        Resume with `since` or `Last-Event-ID`; a snapshot wins over `since`.
         Send the token in `Authorization`; browsers use `fetch` streaming, not `EventSource`.
       parameters:
         - name: collections
@@ -796,6 +801,31 @@ paths:
           required: true
           schema: { type: string, example: "posts,comments" }
           description: Comma-separated collection names (1 to 32).
+        - name: filter.{collection}
+          in: query
+          required: false
+          schema: { type: string, example: "done = false" }
+          description: Filter expression (doc 06, non-relational) for that collection; replace `{collection}` with its name.
+        - name: ids.{collection}
+          in: query
+          required: false
+          schema: { type: string }
+          description: Comma-separated record ids; only these records are delivered.
+        - name: sort.{collection}
+          in: query
+          required: false
+          schema: { type: string, example: "-created" }
+          description: Sort of the snapshot.
+        - name: snapshot
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 1000 }
+          description: Send the current result set (at most this many records per collection) before live events.
+        - name: since
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0 }
+          description: Replay changes after this seq (up to 20 000, else a `resync` event). The `Last-Event-ID` header is the same.
       responses:
         "200":
           description: Event stream
@@ -989,6 +1019,157 @@ paths:
       description: Revokes the key; it stops working on the next request.
       responses:
         "204": { description: Revoked }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/webhooks:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: listWebhooks
+      description: Webhooks of the app (superuser). Secrets are never returned.
+      responses:
+        "200":
+          description: Webhooks
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Webhook" } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createWebhook
+      description: |
+        Creates a webhook (at most 20 per app). Each matching record change after commit is POSTed to `url`
+        as JSON with headers `X-Monolith-Event`, `X-Monolith-Delivery` and
+        `X-Monolith-Signature: t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<raw body>" with the secret>`.
+        2xx = delivered; anything else retries with backoff (5 s doubling, capped at 1 h) up to 10 attempts,
+        then the delivery is `dead` (retry it by hand). Delivery is at least once and may be out of order
+        after retries: de-duplicate on the delivery id, order by `seq`. Hidden fields are never sent.
+        The signing secret is returned once, as `secret`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookIn" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Webhook"
+                  - type: object
+                    required: [secret]
+                    properties:
+                      secret: { type: string, description: The signing secret, shown once }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/webhooks/{id}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: updateWebhook
+      description: Replaces name, URL, events and the enabled flag. The secret stays.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/WebhookIn" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Webhook" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteWebhook
+      description: Deletes the webhook and its delivery log.
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/webhooks/{id}/test:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: testWebhook
+      description: Queues a `ping` delivery (event `ping`, empty record) to check the receiver end to end.
+      responses:
+        "202":
+          description: Queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/WebhookDelivery" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/webhooks/{id}/deliveries:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: listWebhookDeliveries
+      description: Delivery log of one webhook, newest first. Finished rows are kept 7 days, dead ones 28.
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, ok, dead] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        "200":
+          description: Deliveries
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/WebhookDelivery" } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/webhooks/{id}/deliveries/{did}/retry:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+      - name: did
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: retryWebhookDelivery
+      description: Puts a delivery back in the queue with a fresh run of attempts.
+      responses:
+        "202": { description: Queued }
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
@@ -1585,6 +1766,46 @@ components:
         created: { type: string, format: date-time }
         updated: { type: string, format: date-time }
 
+    WebhookIn:
+      type: object
+      additionalProperties: false
+      required: [name, url, events]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        url: { type: string, maxLength: 2048, description: An http(s) URL }
+        events:
+          type: array
+          minItems: 1
+          maxItems: 32
+          items: { type: string, example: "posts.create" }
+          description: "`collection.op` patterns: `posts.create`, `posts.*`, `*.delete`, `*`. Ops: create, update, delete."
+        enabled: { type: boolean, default: true }
+    Webhook:
+      type: object
+      required: [id, name, url, events, enabled, created, secretHint, pending, dead]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        url: { type: string }
+        events: { type: array, items: { type: string } }
+        enabled: { type: boolean }
+        created: { type: string, format: date-time }
+        secretHint: { type: string, description: First 12 characters of the signing secret }
+        pending: { type: integer, description: Deliveries waiting or retrying }
+        dead: { type: integer, description: Deliveries that ran out of attempts }
+    WebhookDelivery:
+      type: object
+      required: [id, event, seq, status, attempts, created]
+      properties:
+        id: { type: string }
+        event: { type: string, example: "posts.create" }
+        seq: { type: integer }
+        status: { type: string, enum: [pending, ok, dead] }
+        attempts: { type: integer }
+        nextAttempt: { type: [string, "null"], format: date-time }
+        lastStatus: { type: [integer, "null"], description: HTTP status of the last attempt }
+        lastError: { type: [string, "null"] }
+        created: { type: string, format: date-time }
     ApiKey:
       type: object
       required: [id, app, name, prefix, scopes, created]

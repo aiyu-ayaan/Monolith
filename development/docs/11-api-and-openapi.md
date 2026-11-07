@@ -132,6 +132,19 @@ as REST, are rate-limited and logged with the key id.
   signature header, timeout 10 s, max attempts 10, dead-letter view in admin UI.
 - Driven from the change bus after commit, never inside the writer transaction.
 
+### Implemented today (`crates/monolith-core/src/webhooks.rs`)
+
+- Events: record `create`/`update`/`delete`, matched by `collection.op` patterns (`posts.create`, `posts.*`, `*.delete`, `*`).
+  Not yet: auth and backup events, per-hook filter expressions.
+- Pipeline: one dispatcher per open app reads `_changes` from a cursor saved in system.db (same commit as the delivery rows,
+  so a crash neither loses nor duplicates an enqueue); the bus only wakes it. One global worker POSTs due rows
+  (up to 32 at once, timeout 10 s, no redirects).
+- Signature: `X-Monolith-Signature: t=<unix s>,v1=<hex HMAC-SHA256 of "<t>.<body>">`, plus `X-Monolith-Event` and `X-Monolith-Delivery`.
+- Retry: 5 s doubling up to 1 h, 10 attempts, then `dead` (manual retry). At-least-once, may be out of order after retries.
+- Hidden fields are never sent. `ping` test delivery. Delivered rows are pruned after 7 days, dead ones after 28.
+- API: `/api/v1/apps/{app}/webhooks[...]` (superuser). The signing secret is stored in plain text in system.db (it is the HMAC key).
+- Not benchmarked. The receiver URL is not filtered (a superuser can point it at an internal address).
+
 ## 8. Versioning
 
 - `/api/v1` stays backward compatible; breaking changes → `/api/v2` with overlap.

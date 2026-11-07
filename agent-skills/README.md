@@ -25,6 +25,7 @@ Or fetch from a running server without the CLI:
 | `monolith-overview` | What Monolith is, apps, concepts, base URLs, which integration way to pick |
 | `monolith-rest` | REST contract, list/filter/cursor, batch, errors |
 | `monolith-realtime` | WebSocket/SSE frames, subscriptions, resume, channels |
+| `monolith-webhooks` | Outbound webhooks: create, verify signature, retries, debugging |
 | `monolith-sync` | Offline-first pull/push, conflicts, bootstrap |
 | `monolith-rules` | Rule/filter language, classes, how to write safe rules |
 | `monolith-auth-keys` | Users, tokens, refresh, API keys and scopes |

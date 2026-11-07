@@ -36,6 +36,18 @@ CREATE TABLE IF NOT EXISTS api_keys (
   last_used INTEGER, rate_limit INTEGER, allowed_ips TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS api_keys_app ON api_keys (app, created);
+CREATE TABLE IF NOT EXISTS webhooks (
+  id BLOB PRIMARY KEY, app TEXT NOT NULL, name TEXT NOT NULL, url TEXT NOT NULL,
+  secret TEXT NOT NULL, events TEXT NOT NULL, enabled INTEGER NOT NULL, created INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS webhooks_app ON webhooks (app, created);
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+  id BLOB PRIMARY KEY, hook BLOB NOT NULL, app TEXT NOT NULL, event TEXT NOT NULL,
+  seq INTEGER NOT NULL, payload BLOB NOT NULL, status TEXT NOT NULL, attempts INTEGER NOT NULL,
+  next_at INTEGER NOT NULL, last_status INTEGER, last_error TEXT, created INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS wh_deliveries_due ON webhook_deliveries (status, next_at);
+CREATE INDEX IF NOT EXISTS wh_deliveries_hook ON webhook_deliveries (hook, created);
 ";
 
 /// A console administrator (row of `superusers`, without the hash).
@@ -54,7 +66,9 @@ pub struct AppInfo {
 
 pub struct Registry {
     dir: PathBuf,
-    pub(crate) sys: SqliteStore,
+    pub(crate) sys: Arc<SqliteStore>,
+    /// Outbound webhooks: per-app hook cache, change cursors and the delivery worker.
+    pub(crate) wh: Arc<crate::webhooks::WhHub>,
     apps: RwLock<HashMap<String, Arc<App>>>,
     pub(crate) open_lock: tokio::sync::Mutex<()>,
     token_key: Vec<u8>,
@@ -178,6 +192,8 @@ impl Registry {
             .map_err(blocking_err)?
             .map_err(|e| CoreError::Internal(e.to_string()))?;
         let keys = crate::apikeys::load(&sys).await?;
+        let sys = Arc::new(sys);
+        let wh = crate::webhooks::WhHub::start(sys.clone()).await?;
         Ok(Registry {
             dir: dir.to_owned(),
             keys: RwLock::new(keys),
@@ -186,6 +202,7 @@ impl Registry {
                 (std::thread::available_parallelism().map_or(2, |n| n.get()) / 2).max(1),
             )),
             sys,
+            wh,
             apps: RwLock::new(HashMap::new()),
             open_lock: tokio::sync::Mutex::new(()),
             token_key: token_key.to_vec(),
@@ -318,6 +335,7 @@ impl Registry {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .insert(name.to_owned(), app.clone());
+        crate::webhooks::spawn_dispatcher(self.wh.clone(), &app);
         Ok(app)
     }
 
@@ -368,6 +386,7 @@ impl Registry {
             Err(e) => return Err(e.into()),
         }
         self.drop_api_keys(name).await?;
+        self.drop_webhooks(name).await?;
         self.files
             .write()
             .unwrap_or_else(|e| e.into_inner())

@@ -48,6 +48,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rpassword = "7"
 futures-core = "0.3"
+# Same feature set object_store already enables, so no new crates.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

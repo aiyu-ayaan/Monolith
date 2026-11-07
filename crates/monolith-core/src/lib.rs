@@ -16,6 +16,7 @@ pub mod schema;
 pub mod storage_cfg;
 pub mod system;
 pub mod thumbs;
+pub mod webhooks;
 
 pub use apikeys::{ApiKey, ApiKeyIn, ApiKeyInfo};
 pub use app::{
@@ -32,3 +33,4 @@ pub use monolith_store::Value;
 pub use schema::{Collection, CollectionDef, Schema};
 pub use storage_cfg::{StorageConfigIn, StorageConfigView};
 pub use system::{AppInfo, Registry, SuperuserInfo};
+pub use webhooks::{DeliveryInfo, WebhookIn, WebhookInfo};

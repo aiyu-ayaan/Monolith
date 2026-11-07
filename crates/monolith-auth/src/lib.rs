@@ -103,6 +103,14 @@ fn unhex<const N: usize>(s: &str) -> Option<[u8; N]> {
     Some(out)
 }
 
+/// HMAC-SHA256 of `msg` under `key`, lowercase hex (webhook signatures).
+pub fn hmac_sha256_hex(key: &[u8], msg: &[u8]) -> String {
+    let mut m =
+        <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
+    m.update(msg);
+    hex(&m.finalize().into_bytes())
+}
+
 fn mac(key: &[u8], body: &str) -> Hmac<Sha256> {
     let mut m =
         <Hmac<Sha256> as KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");

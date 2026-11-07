@@ -575,7 +575,12 @@ impl App {
     }
 
     /// Rows for `ids` (full column list, slot order), in one statement per chunk.
-    async fn rt_fetch(&self, c: &Collection, version: u64, ids: &[Id]) -> Vec<Vec<Value>> {
+    pub(crate) async fn rt_fetch(
+        &self,
+        c: &Collection,
+        version: u64,
+        ids: &[Id],
+    ) -> Vec<Vec<Value>> {
         let mut rows = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(BUCKETS[3]) {
             let b = bucket(chunk.len());

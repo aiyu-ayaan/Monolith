@@ -1396,6 +1396,7 @@ dependencies = [
  "monolith-rules",
  "monolith-store",
  "object_store",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

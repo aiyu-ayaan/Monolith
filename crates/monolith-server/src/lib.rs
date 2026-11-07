@@ -476,6 +476,23 @@ pub fn router(reg: Arc<Registry>) -> Router {
             axum::routing::delete(revoke_api_key).put(update_api_key),
         )
         .route(
+            "/api/v1/apps/{app}/webhooks",
+            get(list_webhooks).post(create_webhook),
+        )
+        .route(
+            "/api/v1/apps/{app}/webhooks/{id}",
+            axum::routing::delete(delete_webhook).put(update_webhook),
+        )
+        .route("/api/v1/apps/{app}/webhooks/{id}/test", post(test_webhook))
+        .route(
+            "/api/v1/apps/{app}/webhooks/{id}/deliveries",
+            get(list_deliveries),
+        )
+        .route(
+            "/api/v1/apps/{app}/webhooks/{id}/deliveries/{did}/retry",
+            post(retry_delivery),
+        )
+        .route(
             "/api/v1/apps/{app}/buckets",
             get(list_buckets).post(create_bucket),
         )
@@ -1832,6 +1849,91 @@ async fn revoke_api_key(
     require_su(&reg, &headers)?;
     reg.revoke_api_key(&app, &id).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+// ---------- webhooks (doc 11 §7, doc 14) ----------
+
+async fn list_webhooks(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(json!({"items": reg.list_webhooks(&app).await?})).into_response())
+}
+
+/// The response carries the signing secret as `secret`; it is never shown again.
+async fn create_webhook(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let input: monolith_core::WebhookIn = parse_json(body)?;
+    let (info, secret) = reg.create_webhook(&app, input).await?;
+    let mut out =
+        serde_json::to_value(info).map_err(|e| ApiError(CoreError::Internal(e.to_string())))?;
+    out["secret"] = json!(secret);
+    Ok((StatusCode::CREATED, axum::Json(out)).into_response())
+}
+
+async fn update_webhook(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let input: monolith_core::WebhookIn = parse_json(body)?;
+    Ok(axum::Json(reg.update_webhook(&app, &id, input).await?).into_response())
+}
+
+async fn delete_webhook(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    reg.delete_webhook(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn test_webhook(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        axum::Json(reg.test_webhook(&app, &id).await?),
+    )
+        .into_response())
+}
+
+async fn list_deliveries(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let limit = q.get("limit").and_then(|l| l.parse().ok()).unwrap_or(50);
+    let items = reg
+        .list_deliveries(&app, &id, q.get("status").map(String::as_str), limit)
+        .await?;
+    Ok(axum::Json(json!({"items": items})).into_response())
+}
+
+async fn retry_delivery(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id, did)): Path<(String, String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    reg.retry_delivery(&app, &id, &did).await?;
+    Ok(StatusCode::ACCEPTED.into_response())
 }
 
 // ---------- admin UI (doc 15 §4) ----------
