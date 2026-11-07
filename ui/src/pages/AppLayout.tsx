@@ -3,14 +3,14 @@ import { useLocation, useNavigate, useParams, type RouteSectionProps } from "@so
 import { api, enc, ready, type ApiError, type Collection } from "../api";
 import { Icon, toast } from "../ui";
 import ErrorBox from "./ErrorBox";
-import SchemaEditor from "./SchemaEditor";
+import SchemaEditor, { type Tab } from "./SchemaEditor";
 import AppDashboard from "./AppDashboard";
 import ProjectNav from "./ProjectNav";
 
 interface AppCtx {
   collections: Resource<{ items: Collection[] }>;
   /** Opens the schema drawer; `null` starts a new collection. */
-  editSchema: (c: Collection | null) => void;
+  editSchema: (c: Collection | null, tab?: Tab) => void;
 }
 
 const Ctx = createContext<AppCtx>();
@@ -24,11 +24,11 @@ export default function AppLayout(props: RouteSectionProps) {
     () => params.app,
     (app) => api<{ items: Collection[] }>("GET", `/api/v1/apps/${enc(app)}/collections`),
   );
-  const [editing, setEditing] = createSignal<{ c: Collection | null } | null>(null);
+  const [editing, setEditing] = createSignal<{ c: Collection | null; tab?: Tab } | null>(null);
   const appPath = () => `/apps/${enc(params.app!)}`;
 
   return (
-    <Ctx.Provider value={{ collections: cols, editSchema: (c) => setEditing({ c }) }}>
+    <Ctx.Provider value={{ collections: cols, editSchema: (c, tab) => setEditing({ c, tab }) }}>
       <div class="with-sidebar">
         <ProjectNav
           app={params.app!}
@@ -44,6 +44,7 @@ export default function AppLayout(props: RouteSectionProps) {
           <SchemaEditor
             app={params.app!}
             initial={e().c}
+            tab={e().tab}
             collections={ready(cols)?.items ?? []}
             onClose={() => setEditing(null)}
             onSaved={async (c) => {

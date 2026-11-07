@@ -10,6 +10,8 @@ import AppLayout, { AppHome } from "./pages/AppLayout";
 import { AppAnalytics, SystemAnalytics } from "./pages/Analytics";
 import Records from "./pages/Records";
 import Auth from "./pages/Auth";
+import Logs from "./pages/Logs";
+import Rules from "./pages/Rules";
 import "./styles.css";
 
 function Shell(props: RouteSectionProps) {
@@ -56,6 +58,8 @@ render(
             <Route path="/" component={AppHome} />
             <Route path="/analytics" component={AppAnalytics} />
             <Route path="/auth" component={Auth} />
+            <Route path="/logs" component={Logs} />
+            <Route path="/rules" component={Rules} />
             <Route path="/c/:coll" component={Records} />
           </Route>
         </Route>

@@ -45,11 +45,12 @@ function cleanField(f: Field): Field {
 
 const num = (s: string) => (s.trim() === "" ? undefined : Number(s));
 
-type Tab = "fields" | "rules" | "indexes";
+export type Tab = "fields" | "rules" | "indexes";
 
 export default function SchemaEditor(p: {
   app: string;
   initial: Collection | null;
+  tab?: Tab;
   collections: Collection[];
   onClose: () => void;
   onSaved: (c: Collection) => void;
@@ -60,7 +61,7 @@ export default function SchemaEditor(p: {
     ? structuredClone({ ...p.initial, rules: p.initial.rules ?? {}, indexes: p.initial.indexes ?? [] })
     : { name: "", fields: [], rules: {}, indexes: [] };
   const [draft, setDraft] = createStore<Draft>({ c: start, indexText: indexesToText(start.indexes) });
-  const [tab, setTab] = createSignal<Tab>("fields");
+  const [tab, setTab] = createSignal<Tab>(p.tab ?? "fields");
   const [error, setError] = createSignal<ApiError | null>(null);
   const [busy, setBusy] = createSignal(false);
   const base = `/api/v1/apps/${enc(p.app)}/collections`;

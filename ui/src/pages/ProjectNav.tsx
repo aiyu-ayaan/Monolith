@@ -21,10 +21,10 @@ const SHORTCUTS = [AUTH, DB, STORAGE, REALTIME, ANALYTICS];
 
 const CATEGORIES: { id: string; label: string; items: Item[] }[] = [
   { id: "data", label: "Database & storage", items: [DB, STORAGE, { id: "backups", label: "Backups", icon: "archive" }] },
-  { id: "security", label: "Security", items: [AUTH, { id: "rules", label: "Access rules", icon: "shield" }, { id: "keys", label: "API keys", icon: "lock" }] },
+  { id: "security", label: "Security", items: [AUTH, { id: "rules", label: "Access rules", icon: "shield", to: "/rules" }, { id: "keys", label: "API keys", icon: "lock" }] },
   { id: "sync", label: "Realtime & sync", items: [REALTIME, { id: "sync", label: "Offline sync", icon: "refresh" }] },
   { id: "extend", label: "Extensibility", items: [{ id: "hooks", label: "Webhooks", icon: "plug" }, { id: "plugins", label: "Plugins", icon: "plug" }] },
-  { id: "observe", label: "Monitoring", items: [ANALYTICS, { id: "logs", label: "Logs", icon: "list" }] },
+  { id: "observe", label: "Monitoring", items: [ANALYTICS, { id: "logs", label: "Logs", icon: "list", to: "/logs" }] },
 ];
 
 /** Firebase-style project navigation: overview, shortcuts, product categories. Project scope only. */

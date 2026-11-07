@@ -1818,3 +1818,26 @@ button.badge {
     transition: none;
   }
 }
+
+.rule-expr {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  font-size: 12px;
+}
+
+.log-detail {
+  background: var(--surface-2);
+  padding: 8px 14px;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.wide-search {
+  max-width: 420px;
+}
