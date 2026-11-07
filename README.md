@@ -172,7 +172,7 @@ Measured on 2026-11-07, release build at the commit that added this section. The
 | Create one record | 46.8k req/s | 24.0k req/s | 3.40 ms |
 | Batch of 100 creates | 62.6k rows/s* | 87.4k rows/s | — |
 
-\* The 4-core batch run hit an intermittent ~1 s write stall that is still under investigation. The 1-core run shows the normal rate.
+\* The 4-core batch run hit a ~1 s write stall. This is the test machine's QLC SSD dropping to about 20 MB/s with 0.2-1 s write latency, not the server (details in the summary). The 1-core run shows the normal rate. Use a disk with steady write speed for write-heavy apps.
 
 Footprint on one core: **10.8 MB RSS idle**, **55 MB with 20 apps open**, 0% idle CPU, and a 30 ms cold start. One core serves about 36k reads/s and 24k writes/s. Estimate, not yet tested on a real VPS: a 1 vCPU / 512 MB host should be enough for small and medium apps. A database larger than RAM also uses page cache through SQLite `mmap`, which the kernel can reclaim.
 

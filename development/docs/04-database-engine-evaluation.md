@@ -158,8 +158,15 @@ Compile-time flags for the bundled SQLite (via `LIBSQLITE3_FLAGS`):
 `SQLITE_ENABLE_STAT4`, `SQLITE_THREADSAFE=2` (each connection used by one thread at a
 time). Each flag is verified by the bake-off, not assumed.
 
-Checkpointing: a background task runs `PRAGMA wal_checkpoint(PASSIVE)` when the
-writer is idle and `TRUNCATE` during low traffic, so WAL growth never stalls readers.
+Checkpointing: one background thread shared by all stores runs
+`PRAGMA wal_checkpoint(PASSIVE)` on a short-lived connection. Each writer asks for it at
+most every 100 ms while busy and once when idle. The writer keeps
+`wal_autocheckpoint = 4000` as a backstop, because a PASSIVE pass alone never lets the WAL
+restart under nonstop writes. Measured 2026-11-07: when the writer did all the
+checkpointing, every queued write waited behind its fsyncs. With the background pass, on a
+healthy disk, max single-create latency fell from 57-76 ms to 35-45 ms, batch p99 halved
+(44 ms to 21 ms), peak write bursts fell by about a third, and the WAL stayed near 17 MB.
+`TRUNCATE` during low traffic is not built yet.
 
 ## 6. Phase 0 bake-off (decides this ADR)
 
