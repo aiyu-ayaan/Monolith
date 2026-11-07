@@ -15,6 +15,7 @@ import Rules from "./pages/Rules";
 import Realtime from "./pages/Realtime";
 import Backups from "./pages/Backups";
 import Webhooks from "./pages/Webhooks";
+import Plugins from "./pages/Plugins";
 import Storage from "./pages/Storage";
 import Settings from "./pages/Settings";
 import UserMenu from "./pages/UserMenu";
@@ -75,6 +76,7 @@ render(
             <Route path="/realtime" component={Realtime} />
             <Route path="/backups" component={Backups} />
             <Route path="/webhooks" component={Webhooks} />
+            <Route path="/plugins" component={Plugins} />
             <Route path="/keys" component={() => <Navigate href={`/apps/${encodeURIComponent(useParams().app!)}/settings/keys`} />} />
             <Route path="/storage" component={Storage} />
             <Route path="/settings/:tab?" component={Settings} />

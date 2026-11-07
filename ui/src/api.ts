@@ -338,3 +338,17 @@ export interface WebhookDelivery {
   lastError: string | null;
   created: string;
 }
+
+export interface Plugin {
+  id: string;
+  name: string;
+  events: string[];
+  enabled: boolean;
+  created: string;
+  size: number;
+  fuel: number;
+  calls: number;
+  errors: number;
+  lastError: string | null;
+  lastRun: string | null;
+}
