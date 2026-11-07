@@ -47,12 +47,14 @@ pub struct Registry {
     dir: PathBuf,
     pub(crate) sys: SqliteStore,
     apps: RwLock<HashMap<String, Arc<App>>>,
-    open_lock: tokio::sync::Mutex<()>,
+    pub(crate) open_lock: tokio::sync::Mutex<()>,
     token_key: Vec<u8>,
     /// Verified against when the email is unknown, so timing does not reveal accounts.
     dummy_hash: String,
     /// One-time installer token `(token, expires µs)`, memory only (doc 18 §2).
     install: tokio::sync::Mutex<Option<(String, i64)>>,
+    /// Storage of apps that used it since start.
+    pub(crate) files: RwLock<HashMap<String, Arc<crate::files::Files>>>,
     /// Live API keys by SHA-256 of the secret; verification never touches the DB (doc 08 §2).
     pub(crate) keys: RwLock<HashMap<[u8; 32], Arc<crate::apikeys::ApiKey>>>,
     /// All HTTP traffic plus every app's record ops (in memory, since start).
@@ -139,6 +141,7 @@ impl Registry {
         Ok(Registry {
             dir: dir.to_owned(),
             keys: RwLock::new(keys),
+            files: RwLock::new(HashMap::new()),
             sys,
             apps: RwLock::new(HashMap::new()),
             open_lock: tokio::sync::Mutex::new(()),
@@ -311,6 +314,10 @@ impl Registry {
             Err(e) => return Err(e.into()),
         }
         self.drop_api_keys(name).await?;
+        self.files
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(name);
         let dir = self.app_dir(name);
         tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&dir) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),

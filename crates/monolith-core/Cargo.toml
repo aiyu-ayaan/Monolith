@@ -10,6 +10,7 @@ publish.workspace = true
 monolith-store.workspace = true
 monolith-rules.workspace = true
 monolith-auth.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
