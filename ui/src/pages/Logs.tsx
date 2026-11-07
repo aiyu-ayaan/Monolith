@@ -85,7 +85,7 @@ export default function Logs() {
                       <span classList={{ "status-pill": true, bad: l.status >= 500, warn: l.status >= 400 && l.status < 500 }}>{l.status}</span>
                     </td>
                     <td class="num">{fmtUs(l.durationUs)}</td>
-                    <td class="small">{l.superuser ? "superuser" : "anonymous"}</td>
+                    <td class="small">{l.superuser ? "superuser" : l.key ? `key ${l.key.slice(0, 8)}…` : "anonymous"}</td>
                     <td class="mono small">{l.requestId}</td>
                   </tr>
                   <Show when={open() === l.requestId}>

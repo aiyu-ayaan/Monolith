@@ -32,7 +32,8 @@ CREATE TABLE IF NOT EXISTS superusers (
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value BLOB NOT NULL) STRICT;
 CREATE TABLE IF NOT EXISTS api_keys (
   id BLOB PRIMARY KEY, app TEXT NOT NULL, name TEXT NOT NULL, prefix TEXT NOT NULL,
-  hash BLOB NOT NULL UNIQUE, scopes TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER
+  hash BLOB NOT NULL UNIQUE, scopes TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER,
+  last_used INTEGER, rate_limit INTEGER, allowed_ips TEXT
 ) STRICT;
 CREATE INDEX IF NOT EXISTS api_keys_app ON api_keys (app, created);
 ";

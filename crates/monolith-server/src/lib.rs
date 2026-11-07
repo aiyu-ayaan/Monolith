@@ -66,6 +66,11 @@ impl IntoResponse for ApiError {
                 "Payload too large",
             ),
             CoreError::Busy => (StatusCode::SERVICE_UNAVAILABLE, "busy", "Busy"),
+            CoreError::RateLimited(_) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                "rate-limited",
+                "Too many requests",
+            ),
             CoreError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal",
@@ -99,6 +104,10 @@ impl IntoResponse for ApiError {
         if status == StatusCode::SERVICE_UNAVAILABLE {
             res.headers_mut()
                 .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+        }
+        if let CoreError::RateLimited(s) = &self.0 {
+            res.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(*s));
         }
         res
     }
@@ -164,7 +173,8 @@ fn classify<'a>(method: &axum::http::Method, rest: &'a str) -> (ReqKind, Option<
 
 /// Echoes a valid client `X-Request-Id` or mints one; problem bodies carry it too.
 /// Also feeds the request trace ring buffer and the traffic metrics.
-async fn request_id(State(reg): St, req: Request, next: Next) -> Response {
+async fn request_id(State(reg): St, mut req: Request, next: Next) -> Response {
+    set_client_ip(&mut req);
     let rid = req
         .headers()
         .get("x-request-id")
@@ -172,6 +182,11 @@ async fn request_id(State(reg): St, req: Request, next: Next) -> Response {
         .filter(|s| valid_request_id(s))
         .map_or_else(|| encode_string(&new_id()), str::to_owned);
     let su = principal(&reg, req.headers()).is_ok_and(|p| p.superuser);
+    let key = bearer(req.headers())
+        .ok()
+        .flatten()
+        .and_then(|t| reg.lookup_api_key(t))
+        .map(|k| encode_string(&k.id));
     let (method, path) = (req.method().clone(), req.uri().path().to_owned());
     let app_name = path
         .strip_prefix("/api/v1/apps/")
@@ -226,6 +241,7 @@ async fn request_id(State(reg): St, req: Request, next: Next) -> Response {
             status,
             duration_us,
             superuser: su,
+            key,
             error,
         });
     }
@@ -233,6 +249,41 @@ async fn request_id(State(reg): St, req: Request, next: Next) -> Response {
         res.headers_mut().insert("x-request-id", v);
     }
     res
+}
+
+/// Header the middleware sets from the socket (or the proxy header); never taken from the client.
+const CLIENT_IP: &str = "x-monolith-client-ip";
+
+/// `MONOLITH_TRUST_PROXY=1`: take the client address from the last `X-Forwarded-For` entry, which
+/// is the one the nearest proxy appended. Off by default: a client could otherwise forge it.
+fn trust_proxy() -> bool {
+    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *V.get_or_init(|| std::env::var("MONOLITH_TRUST_PROXY").is_ok_and(|v| v == "1" || v == "true"))
+}
+
+fn set_client_ip(req: &mut Request) {
+    let from_proxy = trust_proxy()
+        .then(|| {
+            req.headers()
+                .get("x-forwarded-for")?
+                .to_str()
+                .ok()?
+                .rsplit(',')
+                .next()?
+                .trim()
+                .parse::<std::net::IpAddr>()
+                .ok()
+        })
+        .flatten();
+    let ip = from_proxy.or_else(|| {
+        req.extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|c| c.0.ip())
+    });
+    req.headers_mut().remove(CLIENT_IP);
+    if let Some(v) = ip.and_then(|ip| HeaderValue::from_str(&ip.to_string()).ok()) {
+        req.headers_mut().insert(CLIENT_IP, v);
+    }
 }
 
 fn bearer(headers: &HeaderMap) -> ApiResult<Option<&str>> {
@@ -295,9 +346,10 @@ impl Caller {
 fn caller(reg: &Registry, headers: &HeaderMap, app: &str) -> ApiResult<Caller> {
     match bearer(headers)? {
         Some(t) if t.starts_with("mk_") => {
-            let k = reg
-                .verify_api_key(t)
-                .ok_or(ApiError(CoreError::Unauthorized))?;
+            let ip = headers
+                .get(CLIENT_IP)
+                .and_then(|v| v.to_str().ok()?.parse().ok());
+            let k = reg.authorize_api_key(t, ip)?;
             if k.app != app {
                 return Err(ApiError(CoreError::Forbidden(
                     "the API key belongs to another app",
@@ -398,7 +450,7 @@ pub fn router(reg: Arc<Registry>) -> Router {
         )
         .route(
             "/api/v1/apps/{app}/api-keys/{id}",
-            axum::routing::delete(revoke_api_key),
+            axum::routing::delete(revoke_api_key).put(update_api_key),
         )
         .route(
             "/api/v1/apps/{app}/buckets",
@@ -1630,6 +1682,17 @@ async fn create_api_key(
         serde_json::to_value(info).map_err(|e| ApiError(CoreError::Internal(e.to_string())))?;
     out["key"] = json!(secret);
     Ok((StatusCode::CREATED, axum::Json(out)).into_response())
+}
+
+async fn update_api_key(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let input: ApiKeyIn = parse_json(body)?;
+    Ok(axum::Json(reg.update_api_key(&app, &id, input).await?).into_response())
 }
 
 async fn revoke_api_key(

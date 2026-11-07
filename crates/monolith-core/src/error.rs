@@ -38,6 +38,9 @@ pub enum CoreError {
     TooLarge(String),
     #[error("server busy, retry later")]
     Busy,
+    /// Over a per-credential rate limit; the value is the seconds to wait.
+    #[error("rate limit exceeded, retry in {0}s")]
+    RateLimited(u64),
     #[error("internal error: {0}")]
     Internal(String),
 }

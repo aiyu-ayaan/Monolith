@@ -713,7 +713,8 @@ async fn stats_count_reads_writes_and_record_ops() {
             )
             .await
             .body;
-        if s["traffic"]["total"]["deletes"] == 1 {
+        // Per-collection counters are fed from the change bus, a moment after the write returns.
+        if s["traffic"]["total"]["deletes"] == 1 && s["collections"][0]["deletes"] == 1 {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -1485,5 +1486,157 @@ async fn storage_buckets_auth_range_and_limits() {
             .await
             .status,
         StatusCode::NO_CONTENT
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_key_limits_allowlist_update_and_logs() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    t.call(
+        Method::POST,
+        "/api/v1/apps/demo/collections",
+        Some(json!({"name":"tasks","fields":[{"name":"title","type":"text"}],"rules":{"list":"","view":""}})),
+        true,
+    )
+    .await;
+    let keys = "/api/v1/apps/demo/api-keys";
+    let rec = "/api/v1/apps/demo/collections/tasks/records";
+    let mk = |extra: Value| {
+        let mut b = json!({"name":"k","scopes":["records:read"]});
+        b.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        Some(b)
+    };
+    let from = |secret: &str, ip: Option<&str>| {
+        let mut r = Request::get(rec)
+            .header("authorization", format!("Bearer {secret}"))
+            .body(Body::empty())
+            .unwrap();
+        if let Some(ip) = ip {
+            let addr: std::net::SocketAddr = format!("{ip}:5555").parse().unwrap();
+            r.extensions_mut().insert(axum::extract::ConnectInfo(addr));
+        }
+        r
+    };
+
+    // Bad limits and networks are rejected.
+    for bad in [
+        json!({"rateLimitPerMin":0}),
+        json!({"allowedIps":["10.0.0.0/33"]}),
+    ] {
+        assert_eq!(
+            t.call(Method::POST, keys, mk(bad), true).await.status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    // Rate limit: 2 per minute, then 429 with Retry-After.
+    let limited = t
+        .call(Method::POST, keys, mk(json!({"rateLimitPerMin":2})), true)
+        .await;
+    assert_eq!(limited.body["rateLimitPerMin"], 2);
+    let lk = limited.body["key"].as_str().unwrap().to_owned();
+    for _ in 0..2 {
+        assert_eq!(t.raw(from(&lk, None)).await.status, StatusCode::OK);
+    }
+    let res = t.app.clone().oneshot(from(&lk, None)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        res.headers()["retry-after"]
+            .to_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap()
+            >= 1
+    );
+
+    // Allowlist: unknown address and other networks are 403, a matching one passes.
+    let ipk = t
+        .call(
+            Method::POST,
+            keys,
+            mk(json!({"allowedIps":["10.1.0.0/16"]})),
+            true,
+        )
+        .await;
+    let ik = ipk.body["key"].as_str().unwrap().to_owned();
+    assert_eq!(t.raw(from(&ik, None)).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        t.raw(from(&ik, Some("192.0.2.1"))).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        t.raw(from(&ik, Some("10.1.2.3"))).await.status,
+        StatusCode::OK
+    );
+    // A client-sent address header is ignored.
+    let mut spoof = from(&ik, Some("192.0.2.1"));
+    spoof
+        .headers_mut()
+        .insert("x-monolith-client-ip", "10.1.2.3".parse().unwrap());
+    assert_eq!(t.raw(spoof).await.status, StatusCode::FORBIDDEN);
+
+    // Last use shows in the list; the request log names the key.
+    let list = t.call(Method::GET, keys, None, true).await;
+    let row = list.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|k| k["id"] == ipk.body["id"])
+        .unwrap()
+        .clone();
+    assert!(row["lastUsed"].is_string());
+    let logs = t
+        .call(Method::GET, "/api/v1/apps/demo/logs?limit=50", None, true)
+        .await;
+    assert!(
+        logs.body["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l["key"] == ipk.body["id"])
+    );
+
+    // Update: clears the allowlist and raises scopes; the secret keeps working; unknown id is 404.
+    let id = ipk.body["id"].as_str().unwrap();
+    let up = t
+        .call(
+            Method::PUT,
+            &format!("{keys}/{id}"),
+            Some(json!({"name":"renamed","scopes":["records:read","realtime:subscribe"]})),
+            true,
+        )
+        .await;
+    assert_eq!(up.status, StatusCode::OK, "{:?}", up.body);
+    assert_eq!(
+        (
+            up.body["name"].as_str(),
+            up.body["allowedIps"].as_array().map(Vec::len)
+        ),
+        (Some("renamed"), Some(0))
+    );
+    assert!(up.body["lastUsed"].is_string(), "usage survives an update");
+    assert_eq!(
+        t.raw(from(&ik, Some("192.0.2.1"))).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        t.call(
+            Method::PUT,
+            &format!("{keys}/00000000000000000000000000"),
+            Some(json!({"name":"x","scopes":["records:read"]})),
+            true
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
     );
 }

@@ -108,10 +108,9 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Admin UI: Logs, Access rules, Realtime monitor and Backups pages (sidebar items that stay 'Soon': Offline sync, Webhooks, Plugins)
 - [x] API keys v1: per-app, hashed, scoped, in-memory verification; Admin UI page (`docs/08 §7`)
 - [x] Storage buckets v1: private/public buckets, streamed upload, Range/ETag download, listing; Admin UI page (`docs/13 §6`)
-- [ ] API keys follow-ups: `@request.key.*` in rules, IP allowlist, per-key rate limit, publishable keys, last-used,
-      remaining scopes (`users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp`), `monolith keys` CLI
-- [ ] Key/storage hardening (from the known limitations): key id in request logs, orphan-blob GC, per-bucket/app quotas, storage bytes in HTTP metrics, key update endpoint,
-      conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
+- [x] API key hardening: last-used, per-key rate limit (GCRA), IP/CIDR allowlist, key update, `NO_CHANGE_LOG` writes
+- [ ] API keys follow-ups: `@request.key.*` in rules, publishable keys, rate limit for failed auth, remaining scopes (`users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp`), `monolith keys` CLI
+- [ ] Key/storage hardening (from the known limitations): key id in request logs, orphan-blob GC, per-bucket/app quotas, storage bytes in HTTP metrics, conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
 - [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, blake3
       content addressing + dedupe, MIME sniffing, thumbnails, quotas, orphan GC, files in backups, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
@@ -150,11 +149,10 @@ Backups
 API keys
 - Only `records:admin` bypasses rules; other keys are anonymous to the rules and narrowed by scope (no `@request.key.*` yet),
   so a `records:read` key sees no more than an anonymous caller does. `records:admin` is app-wide, not per collection.
-- No IP allowlist, per-key rate limit, publishable keys or last-used time. A lost secret cannot be shown again (only SHA-256 is stored).
-- Request logs and the trace ring buffer do not identify keys: key requests show `superuser: false` and no key id, so you cannot
-  tell which key made a call. Needs a key id in `RequestLog` and the debug endpoints (`docs/22`).
+- No publishable keys. A lost secret cannot be shown again (only SHA-256 is stored); there is no rotate endpoint (create + revoke).
 - Key names are not unique and there is no cap on keys per app. Expired keys stay listed (and in memory) until revoked or restart.
-- Changing a key's scopes or expiry means revoking and creating a new one (no update endpoint).
+- `lastUsed` is saved once a minute, so a crash can lose up to a minute. The IP allowlist behind a reverse proxy only works with
+  `MONOLITH_TRUST_PROXY=1` and a proxy that appends the real client address last in `X-Forwarded-For`.
 - Single node: the in-memory key map is not shared; multi-node needs invalidation over the change bus.
 - Scopes not enforced anywhere yet: `users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp` (they are rejected on create).
 - Auth failures are not rate limited, so a flood of bad keys costs one SHA-256 each and nothing else.

@@ -70,6 +70,8 @@ pub struct RequestLog {
     pub status: u16,
     pub duration_us: u64,
     pub superuser: bool,
+    /// Id of the API key that made the call, if it used one.
+    pub key: Option<String>,
     pub error: Option<String>,
 }
 

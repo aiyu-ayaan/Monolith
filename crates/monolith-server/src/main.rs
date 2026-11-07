@@ -68,13 +68,29 @@ async fn serve(data: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     let closing = reg.clone();
-    axum::serve(listener, monolith_server::router(reg))
-        .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            // Open event streams would otherwise keep the shutdown waiting.
-            closing.close_realtime();
-        })
-        .await?;
+    // Key last-used times live in memory; save the changed ones about once a minute.
+    let flusher = reg.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            if let Err(e) = flusher.flush_key_usage().await {
+                tracing::warn!(error = %e, "saving API key usage failed");
+            }
+        }
+    });
+    axum::serve(
+        listener,
+        monolith_server::router(reg).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        // Open event streams would otherwise keep the shutdown waiting.
+        closing.close_realtime();
+        let _ = closing.flush_key_usage().await;
+    })
+    .await?;
     Ok(())
 }
 

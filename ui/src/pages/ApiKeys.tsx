@@ -24,6 +24,9 @@ export default function ApiKeys() {
   const [preset, setPreset] = createSignal("service");
   const [custom, setCustom] = createSignal("");
   const [days, setDays] = createSignal("90");
+  const [rate, setRate] = createSignal("");
+  const [ips, setIps] = createSignal("");
+  const [editing, setEditing] = createSignal<ApiKey | null>(null);
 
   const scopes = () =>
     (preset() === "custom" ? custom() : PRESETS.find((p) => p.id === preset())!.scopes)
@@ -36,6 +39,21 @@ export default function ApiKeys() {
     setPreset("service");
     setCustom("");
     setDays("90");
+    setRate("");
+    setIps("");
+    setEditing(null);
+    setError(null);
+    setCreating(true);
+  };
+
+  const edit = (k: ApiKey) => {
+    setName(k.name);
+    setPreset("custom");
+    setCustom(k.scopes.join(", "));
+    setDays(""); // the expiry is counted from now, so an untouched field would drop it
+    setRate(k.rateLimitPerMin ? String(k.rateLimitPerMin) : "");
+    setIps(k.allowedIps.join(", "));
+    setEditing(k);
     setError(null);
     setCreating(true);
   };
@@ -45,13 +63,21 @@ export default function ApiKeys() {
     setBusy(true);
     setError(null);
     try {
-      const k = await api<ApiKey & { key: string }>("POST", base(), {
+      const body = {
         name: name(),
         scopes: scopes(),
         ...(days() ? { expiresInDays: Number(days()) } : {}),
-      });
+        ...(rate() ? { rateLimitPerMin: Number(rate()) } : {}),
+        allowedIps: ips().split(",").map((s) => s.trim()).filter(Boolean),
+      };
+      const old = editing();
+      if (old) {
+        await api("PUT", `${base()}/${enc(old.id)}`, body);
+        toast("Key updated");
+      } else {
+        setSecret((await api<ApiKey & { key: string }>("POST", base(), body)).key);
+      }
       setCreating(false);
-      setSecret(k.key);
       refetch();
     } catch (err) {
       setError(err as ApiError);
@@ -127,21 +153,30 @@ export default function ApiKeys() {
               <th scope="col">Name</th>
               <th scope="col">Key</th>
               <th scope="col">Scopes</th>
-              <th scope="col">Created</th>
+              <th scope="col">Limits</th>
+              <th scope="col">Last used</th>
               <th scope="col">Expires</th>
               <th scope="col"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
           <tbody>
-            <For each={ready(list)?.items ?? []} fallback={<tr><td colspan="6" class="empty-row">{list.loading ? "Loading…" : "No API keys yet."}</td></tr>}>
+            <For each={ready(list)?.items ?? []} fallback={<tr><td colspan="7" class="empty-row">{list.loading ? "Loading…" : "No API keys yet."}</td></tr>}>
               {(k) => (
                 <tr>
                   <td>{k.name}</td>
                   <td class="mono small">{k.prefix}…</td>
                   <td class="mono small">{k.scopes.join(", ")}</td>
-                  <td class="small">{fmtDate(k.created)}</td>
+                  <td class="small">
+                    {k.rateLimitPerMin ? `${k.rateLimitPerMin}/min` : "No rate limit"}
+                    <br />
+                    {k.allowedIps.length ? k.allowedIps.join(", ") : "Any address"}
+                  </td>
+                  <td class="small">{k.lastUsed ? fmtDate(k.lastUsed) : "Never"}</td>
                   <td class="small">{k.expires ? fmtDate(k.expires) : "Never"}</td>
-                  <td class="num">
+                  <td class="num nowrap">
+                    <button class="btn secondary sm" onClick={() => edit(k)}>
+                      Edit
+                    </button>{" "}
                     <button class="icon-btn danger" aria-label={`Revoke ${k.name}`} title="Revoke" onClick={() => revoke(k)}>
                       <Icon name="trash" />
                     </button>
@@ -155,7 +190,7 @@ export default function ApiKeys() {
 
       <Show when={creating()}>
         <Drawer
-          title="Create API key"
+          title={editing() ? "Edit API key" : "Create API key"}
           onClose={() => setCreating(false)}
           onSubmit={create}
           footer={
@@ -164,7 +199,7 @@ export default function ApiKeys() {
                 Cancel
               </button>
               <button class="btn" type="submit" disabled={busy()}>
-                Create
+                {editing() ? "Save" : "Create"}
               </button>
             </>
           }
@@ -181,7 +216,7 @@ export default function ApiKeys() {
             </select>
             <span class="help">{PRESETS.find((p) => p.id === preset())!.help}</span>
           </div>
-          <Show when={preset() === "custom"}>
+          <Show when={preset() === "custom" || editing()}>
             <div class="field">
               <label for="kscopes">Scopes</label>
               <input id="kscopes" class="mono" required value={custom()} onInput={(e) => setCustom(e.currentTarget.value)} />
@@ -190,7 +225,17 @@ export default function ApiKeys() {
           <div class="field">
             <label for="kdays">Expires after (days)</label>
             <input id="kdays" type="number" min="1" max="3650" value={days()} onInput={(e) => setDays(e.currentTarget.value)} />
-            <span class="help">Leave empty for a key that never expires.</span>
+            <span class="help">Counted from now. Leave empty for a key that never expires.</span>
+          </div>
+          <div class="field">
+            <label for="krate">Rate limit (requests per minute)</label>
+            <input id="krate" type="number" min="1" max="1000000" value={rate()} onInput={(e) => setRate(e.currentTarget.value)} />
+            <span class="help">Over the limit the key gets 429 with Retry-After. Leave empty for no limit.</span>
+          </div>
+          <div class="field">
+            <label for="kips">Allowed addresses</label>
+            <input id="kips" class="mono" placeholder="203.0.113.7, 10.0.0.0/8" value={ips()} onInput={(e) => setIps(e.currentTarget.value)} />
+            <span class="help">IPs or CIDR networks, comma separated. Leave empty for any address. Behind a reverse proxy set MONOLITH_TRUST_PROXY=1.</span>
           </div>
         </Drawer>
       </Show>

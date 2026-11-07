@@ -116,6 +116,14 @@ route handler ─▶ scope check (fast, bitset) ─▶ collection rule (compiled
   `records:admin` bypasses collection rules (like a superuser limited to the app). **Deviation from §4:**
   every other key is anonymous to the rules and only narrowed by its scopes, because `@request.key.*`
   does not exist yet. Realtime needs `realtime:subscribe` plus `records:read` for each collection.
-- Not yet: `users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp` scopes; IP/CIDR allowlist,
-  per-key rate limit, `publishable` keys, last-used time, `monolith keys` CLI, per-collection `records:admin`.
-- Gaps beyond this list (logs do not show the key, no key update, single-node cache, no auth-failure rate limit): `development/TODO.md` "Known limitations".
+- Per-key limits: `rateLimitPerMin` (GCRA with a burst of the same size, lock-free; 429 + `Retry-After`) and
+  `allowedIps` (IPs/CIDRs, IPv4-mapped IPv6 counts as IPv4; 403 from other or unknown addresses). The client
+  address is the socket peer; with `MONOLITH_TRUST_PROXY=1` it is the last `X-Forwarded-For` entry. The middleware
+  sets it, a client-sent value is dropped. Order of checks: scope app, address, rate, then the use is recorded.
+- `lastUsed` is an atomic store per request, saved by a 60 s background flush (and at shutdown). A crash can
+  lose up to a minute of it.
+- `PUT .../api-keys/{id}` replaces name, scopes, expiry (from now), limits and allowlist; the secret stays valid.
+- Request logs carry the key id (`key`), shown in the Admin UI Logs page.
+- Not yet: `users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp` scopes; `publishable` keys, `monolith keys` CLI,
+  per-collection `records:admin`, shared cache for several nodes.
+- Gaps beyond this list (single-node cache, no rate limit for failed auth, no key rotation endpoint): `development/TODO.md` "Known limitations".

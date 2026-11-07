@@ -204,6 +204,8 @@ export interface RequestLog {
   status: number;
   durationUs: number;
   superuser: boolean;
+  /** Id of the API key used, if any. */
+  key?: string | null;
   error?: string | null;
 }
 
@@ -255,6 +257,9 @@ export interface ApiKey {
   scopes: string[];
   created: string;
   expires: string | null;
+  lastUsed: string | null;
+  rateLimitPerMin: number | null;
+  allowedIps: string[];
 }
 
 export interface Bucket {
