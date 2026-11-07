@@ -67,3 +67,4 @@ Firebase-Storage style buckets, not yet the record-field files of §2–§5.
 - Not yet: S3 backend and presigned URLs, per-user/rule-based access (needs end-user auth), file fields on
   records, `_files` table, orphan GC beyond temp cleanup at open, thumbnails, quotas, delimiter listing,
   files in backups, benchmarks (upload/download throughput and memory are unmeasured).
+- Gaps beyond this list (`_changes` growth in `files.db`, orphan blobs after a crash, serialized metadata commits, no quotas, storage bytes missing from metrics, single Range only): `development/TODO.md` "Known limitations".

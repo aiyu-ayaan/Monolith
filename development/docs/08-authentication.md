@@ -118,3 +118,4 @@ route handler ─▶ scope check (fast, bitset) ─▶ collection rule (compiled
   does not exist yet. Realtime needs `realtime:subscribe` plus `records:read` for each collection.
 - Not yet: `users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp` scopes; IP/CIDR allowlist,
   per-key rate limit, `publishable` keys, last-used time, `monolith keys` CLI, per-collection `records:admin`.
+- Gaps beyond this list (logs do not show the key, no key update, single-node cache, no auth-failure rate limit): `development/TODO.md` "Known limitations".

@@ -110,6 +110,9 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Storage buckets v1: private/public buckets, streamed upload, Range/ETag download, listing; Admin UI page (`docs/13 §6`)
 - [ ] API keys follow-ups: `@request.key.*` in rules, IP allowlist, per-key rate limit, publishable keys, last-used,
       remaining scopes (`users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp`), `monolith keys` CLI
+- [ ] Key/storage hardening (from the known limitations): key id in request logs, `_changes` pruning or a no-log write path for
+      `files.db`/`system.db`, orphan-blob GC, per-bucket/app quotas, storage bytes in HTTP metrics, key update endpoint,
+      conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
 - [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, blake3
       content addressing + dedupe, MIME sniffing, thumbnails, quotas, orphan GC, files in backups, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
@@ -146,14 +149,41 @@ Backups
 - Restore creates a new app; there is no in-place restore. Backups survive deleting the app. Admin UI download buffers the file in the browser.
 
 API keys
-- Only `records:admin` bypasses rules; other keys are anonymous to the rules and narrowed by scope (no `@request.key.*` yet).
-- No IP allowlist, rate limit, publishable keys or last-used time. A lost secret cannot be shown again (only SHA-256 is stored).
+- Only `records:admin` bypasses rules; other keys are anonymous to the rules and narrowed by scope (no `@request.key.*` yet),
+  so a `records:read` key sees no more than an anonymous caller does. `records:admin` is app-wide, not per collection.
+- No IP allowlist, per-key rate limit, publishable keys or last-used time. A lost secret cannot be shown again (only SHA-256 is stored).
+- Request logs and the trace ring buffer do not identify keys: key requests show `superuser: false` and no key id, so you cannot
+  tell which key made a call. Needs a key id in `RequestLog` and the debug endpoints (`docs/22`).
+- Key names are not unique and there is no cap on keys per app. Expired keys stay listed (and in memory) until revoked or restart.
+- Changing a key's scopes or expiry means revoking and creating a new one (no update endpoint).
+- Single node: the in-memory key map is not shared; multi-node needs invalidation over the change bus.
+- Scopes not enforced anywhere yet: `users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp` (they are rejected on create).
+- Auth failures are not rate limited, so a flood of bad keys costs one SHA-256 each and nothing else.
 
 Storage
 - Local disk only; not in backups (restore creates an app without its files). No per-user access, thumbnails, quotas or S3.
 - Not content-addressed: overwriting writes a new blob, so identical uploads are not deduplicated. MIME is as declared by the uploader.
 - Bucket usage counts scan the object index (fine for the admin UI, not for huge buckets). Upload/download are not benchmarked.
-- Admin UI download buffers the object in the browser.
+- Admin UI download buffers the object in the browser; uploads show no progress and run one file at a time.
+- Metadata commits are serialized per app by one mutex, so many small concurrent uploads queue on it (bytes are written in parallel,
+  only the DB step waits). Each commit also costs an fsync of the blob plus a `files.db` write.
+- Every metadata write adds a row to `_changes` in `files.db` (and bucket/key writes in `system.db`); nothing prunes it, so it grows
+  with the number of uploads. The store crate needs a "no change log" write path for non-record tables.
+- Crash windows leak data: a crash between the blob rename and the DB commit leaves an orphan blob; a crash before the old blob is
+  deleted leaves the replaced one. Only `files/.tmp` is cleaned at open. Needs the orphan GC scan.
+- Download: only a single `Range` (multi-range is served whole), no `If-Range`, `Last-Modified` or `If-Modified-Since`.
+  `Cache-Control` is `no-cache` (always revalidates); no immutable caching because keys are mutable names.
+- Upload answers 201 vs 200 by comparing `created` and `updated`, which could misreport a replace within the same microsecond.
+- Object keys containing `%2F` are decoded to `/` by the router before validation; there is no way to store a literal `%2F`.
+- HTTP metrics count storage requests as `other`; streamed uploads and downloads report 0 bytes in/out because the size is not
+  known up front (only `Content-Length` is read), so the traffic charts under-count storage.
+- Not covered by tests: concurrent overwrite of one key, crash recovery, multi-range and `If-Range`, bucket delete during an upload.
+- Quotas: `maxSize` is per object only; there is no per-bucket or per-app total, so a key with `files:write` can fill the disk.
+
+Contract and SDKs (keys and storage)
+- No conformance vectors for scopes or object endpoints, no entries in `api/mcp/tools.json`, no TypeScript/Kotlin SDK methods,
+  and no `docs/api/rest.md` section. REST works without an SDK, but the contract-first rule is only met by `api/openapi`.
+- The generated app-specific agent skill (`monolith-app-<app>`) does not list buckets or keys yet.
 
 Rules engine
 - Known gaps in `api/conformance/vectors/rules.json` (`:length`, `:each`, field-valued `~`).
