@@ -1,14 +1,14 @@
 import { createSignal, For, Show } from "solid-js";
 import { NavItem, SIDEBAR_NAVIGATION } from "../data/navigation";
+import { SupportedLanguage } from "./CodeBlock";
 
 export default function Sidebar(props: {
-  activePageId: string;
-  activeSectionId?: string;
-  onSelect: (pageId: string, sectionId?: string) => void;
+  activeSectionId: string;
+  onNavigateToSection: (sectionId: string, lang?: SupportedLanguage) => void;
 }) {
   const [filter, setFilter] = createSignal("");
   const [openGroups, setOpenGroups] = createSignal<Record<string, boolean>>({
-    "db-root": true,
+    "nav-db-group": true,
   });
 
   const toggleGroup = (id: string) => {
@@ -30,7 +30,7 @@ export default function Sidebar(props: {
         <input
           type="text"
           class="sidebar-filter-input"
-          placeholder="Filter..."
+          placeholder="Filter topics..."
           value={filter()}
           onInput={(e) => setFilter(e.currentTarget.value)}
         />
@@ -48,76 +48,72 @@ export default function Sidebar(props: {
                     {(item) => {
                       const hasChildren = item.children && item.children.length > 0;
                       const isOpen = () => openGroups()[item.id] || filter().length > 0;
-                      const isActive = () =>
-                        props.activePageId === item.pageId &&
-                        (!item.sectionId || props.activeSectionId === item.sectionId);
+                      const isActive = () => props.activeSectionId === item.sectionId;
 
                       return (
                         <div>
-                          <div
+                          <button
+                            type="button"
                             class="sidebar-item"
                             classList={{ active: isActive() }}
                             onClick={() => {
                               if (hasChildren) {
                                 toggleGroup(item.id);
                               }
-                              if (item.pageId) {
-                                props.onSelect(item.pageId, item.sectionId);
-                              }
+                              props.onNavigateToSection(item.sectionId, item.lang);
                             }}
                           >
-                            <span>{item.title}</span>
+                            <span style={{ "text-align": "left", "line-height": "1.3" }}>
+                              {item.title}
+                            </span>
 
-                            <Show when={item.badge}>
-                              <span
-                                style={{
-                                  "font-size": "10px",
-                                  padding: "2px 6px",
-                                  "border-radius": "10px",
-                                  background: "var(--badge-bg)",
-                                  color: "var(--badge-text)",
-                                  "font-weight": "600",
-                                }}
-                              >
-                                {item.badge}
-                              </span>
-                            </Show>
+                            <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+                              <Show when={item.badge}>
+                                <span
+                                  style={{
+                                    "font-size": "10.5px",
+                                    padding: "1px 6px",
+                                    "border-radius": "10px",
+                                    background: "var(--badge-bg)",
+                                    color: "var(--badge-text)",
+                                    "font-weight": "600",
+                                  }}
+                                >
+                                  {item.badge}
+                                </span>
+                              </Show>
 
-                            <Show when={hasChildren}>
-                              <svg
-                                class="sidebar-item-chevron"
-                                classList={{ open: isOpen() }}
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                              >
-                                <polyline points="9 18 15 12 9 6" />
-                              </svg>
-                            </Show>
-                          </div>
+                              <Show when={hasChildren}>
+                                <svg
+                                  class="sidebar-item-chevron"
+                                  classList={{ open: isOpen() }}
+                                  width="14"
+                                  height="14"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                >
+                                  <polyline points="9 18 15 12 9 6" />
+                                </svg>
+                              </Show>
+                            </div>
+                          </button>
 
                           <Show when={hasChildren && isOpen()}>
                             <div class="sidebar-sublist">
                               <For each={item.children}>
                                 {(child) => {
-                                  const isChildActive = () =>
-                                    props.activePageId === child.pageId &&
-                                    props.activeSectionId === child.sectionId;
+                                  const isChildActive = () => props.activeSectionId === child.sectionId;
                                   return (
-                                    <div
+                                    <button
+                                      type="button"
                                       class="sidebar-item"
                                       classList={{ active: isChildActive() }}
-                                      onClick={() => {
-                                        if (child.pageId) {
-                                          props.onSelect(child.pageId, child.sectionId);
-                                        }
-                                      }}
+                                      onClick={() => props.onNavigateToSection(child.sectionId, child.lang)}
                                     >
-                                      <span>{child.title}</span>
-                                    </div>
+                                      <span style={{ "text-align": "left" }}>{child.title}</span>
+                                    </button>
                                   );
                                 }}
                               </For>

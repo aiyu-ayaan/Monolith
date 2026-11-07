@@ -1,14 +1,15 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For } from "solid-js";
 import { CodeSnippets } from "../data/pages";
 
-export type SupportedLanguage = "ts" | "kotlin" | "dart" | "python" | "rust" | "rest";
+export type SupportedLanguage = "ts" | "kotlin" | "dart" | "python" | "rust" | "swift" | "rest";
 
 export const LANGUAGE_LABELS: Record<SupportedLanguage, string> = {
-  ts: "TypeScript",
+  ts: "TypeScript / Web",
   kotlin: "Android (Kotlin)",
   dart: "Flutter (Dart)",
   python: "Python",
   rust: "Rust",
+  swift: "Swift (iOS)",
   rest: "REST (cURL)",
 };
 
@@ -20,7 +21,7 @@ export default function CodeBlock(props: {
   const [copied, setCopied] = createSignal(false);
 
   const availableLangs = (): SupportedLanguage[] => {
-    const list: SupportedLanguage[] = ["ts", "kotlin", "dart", "python", "rust", "rest"];
+    const list: SupportedLanguage[] = ["ts", "kotlin", "dart", "python", "rust", "swift", "rest"];
     return list.filter((l) => Boolean(props.snippets[l]));
   };
 
@@ -32,6 +33,7 @@ export default function CodeBlock(props: {
       props.snippets.dart ??
       props.snippets.python ??
       props.snippets.rust ??
+      props.snippets.swift ??
       props.snippets.rest ??
       ""
     );
@@ -52,8 +54,9 @@ export default function CodeBlock(props: {
           <For each={availableLangs()}>
             {(lang) => (
               <button
+                type="button"
                 class="code-tab"
-                classList={{ active: props.selectedLang === lang }}
+                classList={{ active: props.selectedLang === lang || (!props.snippets[props.selectedLang] && availableLangs()[0] === lang) }}
                 onClick={() => props.onSelectLang(lang)}
               >
                 {LANGUAGE_LABELS[lang]}
@@ -62,8 +65,8 @@ export default function CodeBlock(props: {
           </For>
         </div>
 
-        <button class="code-copy-btn" onClick={handleCopy}>
-          {copied() ? "Copied!" : "Copy"}
+        <button type="button" class="code-copy-btn" onClick={handleCopy}>
+          {copied() ? "✓ Copied" : "Copy"}
         </button>
       </div>
 

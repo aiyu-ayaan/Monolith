@@ -2,12 +2,13 @@ import { createSignal } from "solid-js";
 
 export default function Header(props: {
   onOpenSearch: () => void;
-  onSelectPage: (pageId: string, sectionId?: string) => void;
+  onNavigateToSection: (sectionId: string) => void;
 }) {
   const [dark, setDark] = createSignal(
     typeof window !== "undefined" &&
       (localStorage.getItem("monolith.docs.theme") === "dark" ||
-        (!localStorage.getItem("monolith.docs.theme") && window.matchMedia("(prefers-color-scheme: dark)").matches)),
+        (!localStorage.getItem("monolith.docs.theme") &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches)),
   );
 
   const toggleTheme = () => {
@@ -30,7 +31,14 @@ export default function Header(props: {
   return (
     <header class="top-header">
       <div class="top-header-left">
-        <a href="#/firestore" class="brand-logo" onClick={() => props.onSelectPage("firestore")}>
+        <a
+          href="#overview"
+          class="brand-logo"
+          onClick={(e) => {
+            e.preventDefault();
+            props.onNavigateToSection("overview");
+          }}
+        >
           <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
             <rect width="32" height="32" rx="6" fill="#1A73E8" />
             <path
@@ -43,31 +51,66 @@ export default function Header(props: {
         </a>
 
         <nav class="primary-nav">
-          <a href="#/firestore" class="nav-link active">Build</a>
-          <a href="#/firestore" class="nav-link">Run</a>
-          <a href="#/sdks" class="nav-link">Reference</a>
-          <a href="#/storage" class="nav-link">Solutions</a>
-          <a href="#/sdks" class="nav-link">Pricing</a>
+          <button
+            type="button"
+            class="nav-link"
+            onClick={() => props.onNavigateToSection("overview")}
+          >
+            Overview
+          </button>
+          <button
+            type="button"
+            class="nav-link active"
+            onClick={() => props.onNavigateToSection("crud-records")}
+          >
+            Database
+          </button>
+          <button
+            type="button"
+            class="nav-link"
+            onClick={() => props.onNavigateToSection("access-rules")}
+          >
+            Auth & Rules
+          </button>
+          <button
+            type="button"
+            class="nav-link"
+            onClick={() => props.onNavigateToSection("storage-buckets")}
+          >
+            Storage
+          </button>
+          <button
+            type="button"
+            class="nav-link"
+            onClick={() => props.onNavigateToSection("sdk-matrix")}
+          >
+            SDKs
+          </button>
         </nav>
       </div>
 
       <div class="top-header-right">
         {/* New in Cloud Database Pill Banner (Image 1 match) */}
         <button
+          type="button"
           class="pill-banner"
-          onClick={() => props.onSelectPage("firestore", "realtime-streaming")}
-          title="See latest Cloud Database releases"
+          onClick={() => props.onNavigateToSection("realtime-streaming")}
+          title="See realtime streaming updates"
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M11 5L6 9H2v6h4l5 4V5z"/>
-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            <path d="M11 5L6 9H2v6h4l5 4V5z" />
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
           </svg>
           <span class="pill-dot"></span>
           <span>New in Cloud Database</span>
         </button>
 
         {/* Search trigger with keyboard shortcut */}
-        <button class="search-trigger" onClick={props.onOpenSearch}>
+        <button
+          type="button"
+          class="search-trigger"
+          onClick={props.onOpenSearch}
+        >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -77,7 +120,12 @@ export default function Header(props: {
         </button>
 
         {/* Theme Toggle Button */}
-        <button class="icon-btn" onClick={toggleTheme} title="Toggle theme">
+        <button
+          type="button"
+          class="icon-btn"
+          onClick={toggleTheme}
+          title="Toggle light/dark theme"
+        >
           {dark() ? (
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="5" />
@@ -98,7 +146,12 @@ export default function Header(props: {
         </button>
 
         {/* Go to Console button */}
-        <a href="http://localhost:8090/_/" target="_blank" rel="noopener noreferrer" class="btn-console">
+        <a
+          href="http://localhost:8090/_/"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="btn-console"
+        >
           <span>Go to console</span>
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
@@ -106,24 +159,6 @@ export default function Header(props: {
             <line x1="10" y1="14" x2="21" y2="3" />
           </svg>
         </a>
-
-        {/* User avatar */}
-        <div
-          style={{
-            width: "32px",
-            height: "32px",
-            "border-radius": "50%",
-            background: "#1A73E8",
-            color: "#FFF",
-            display: "flex",
-            "align-items": "center",
-            "justify-content": "center",
-            "font-size": "13px",
-            "font-weight": "600",
-          }}
-        >
-          M
-        </div>
       </div>
     </header>
   );

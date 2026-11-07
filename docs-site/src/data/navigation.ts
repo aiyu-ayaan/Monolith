@@ -1,71 +1,86 @@
+import { SupportedLanguage } from "../components/CodeBlock";
+
 export interface NavItem {
   id: string;
   title: string;
-  pageId?: string;
-  sectionId?: string;
+  sectionId: string;
   badge?: string;
+  lang?: SupportedLanguage;
   children?: NavItem[];
 }
 
 export interface NavSection {
   title: string;
+  category: string;
   items: NavItem[];
 }
 
 export const SIDEBAR_NAVIGATION: NavSection[] = [
   {
-    title: "Overview",
+    title: "Overview & Fundamentals",
+    category: "Overview",
     items: [
-      { id: "intro", title: "Introduction & Quickstart", pageId: "firestore", sectionId: "quickstart-init" },
-      { id: "arch", title: "Architecture & Group Commit", pageId: "firestore", sectionId: "quickstart-init" },
+      { id: "nav-overview", title: "Introduction & Capabilities", sectionId: "overview" },
+      { id: "nav-arch", title: "Architecture & Group Commit", sectionId: "architecture" },
+      { id: "nav-quickstart", title: "Quickstart & Initialization", sectionId: "quickstart" },
+      { id: "nav-datamodel", title: "Data Model, UUIDv7 & Schema", sectionId: "data-model" },
     ],
   },
   {
     title: "Cloud Database",
+    category: "Database",
     items: [
       {
-        id: "db-root",
-        title: "Collections & Data",
-        pageId: "firestore",
+        id: "nav-db-group",
+        title: "Collections & Records",
+        sectionId: "crud-records",
         children: [
-          { id: "db-crud", title: "CRUD Operations", pageId: "firestore", sectionId: "crud-records" },
-          { id: "db-filter", title: "Filtering & Keyset Pagination", pageId: "firestore", sectionId: "keyset-filtering" },
-          { id: "db-batch", title: "Atomic Batch Operations", pageId: "firestore", sectionId: "batch-transactions" },
+          { id: "nav-crud", title: "CRUD & Optimistic Concurrency", sectionId: "crud-records" },
+          { id: "nav-filter", title: "Filtering & Keyset Pagination", sectionId: "keyset-filtering" },
+          { id: "nav-relations", title: "Relations & Multi-Hop Expand", sectionId: "relations-expand" },
+          { id: "nav-batch", title: "Atomic Batch Transactions", sectionId: "batch-transactions" },
         ],
       },
       {
-        id: "realtime-root",
-        title: "Realtime Synchronization",
-        pageId: "firestore",
+        id: "nav-realtime",
+        title: "Realtime Synchronization (SSE)",
         sectionId: "realtime-streaming",
+        badge: "SSE",
       },
     ],
   },
   {
-    title: "Authentication",
+    title: "Authentication & Security",
+    category: "Auth & Rules",
     items: [
-      { id: "auth-signin", title: "Password Login & Tokens", pageId: "auth", sectionId: "auth-signin" },
-      { id: "auth-keys", title: "Scoped Runtime API Keys", pageId: "auth", sectionId: "auth-signin" },
-      { id: "auth-install", title: "First-Superuser Bootstrap", pageId: "auth", sectionId: "auth-signin" },
+      { id: "nav-rules", title: "Collection Access Rules", sectionId: "access-rules" },
+      { id: "nav-signin", title: "Password Login & Token Rotation", sectionId: "auth-signin" },
+      { id: "nav-oauth", title: "OAuth2 / OIDC & Auth Policy", sectionId: "auth-oauth" },
+      { id: "nav-apikeys", title: "Scoped Runtime API Keys", sectionId: "auth-keys" },
+      { id: "nav-install", title: "First-Superuser Bootstrap", sectionId: "auth-install" },
     ],
   },
   {
-    title: "Storage & Files",
+    title: "Storage, Backups & Ops",
+    category: "Storage & Ops",
     items: [
-      { id: "storage-files", title: "Buckets & File Uploads", pageId: "storage", sectionId: "storage-upload-url" },
-      { id: "storage-thumbs", title: "On-Demand Thumbnails", pageId: "storage", sectionId: "storage-upload-url" },
+      { id: "nav-storage", title: "Buckets & BLAKE3 Deduplication", sectionId: "storage-buckets" },
+      { id: "nav-thumbs", title: "On-Demand Image Thumbnails", sectionId: "storage-thumbs" },
+      { id: "nav-backups", title: "Online Backups, Restore & Metrics", sectionId: "backups-ops" },
     ],
   },
   {
     title: "API & SDK Reference",
+    category: "SDK Reference",
     items: [
-      { id: "ref-ts", title: "TypeScript / Web", pageId: "sdks", sectionId: "sdk-matrix", badge: "v0" },
-      { id: "ref-kotlin", title: "Android (Kotlin)", pageId: "sdks", sectionId: "sdk-matrix", badge: "v0" },
-      { id: "ref-dart", title: "Flutter (Dart)", pageId: "sdks", sectionId: "sdk-matrix", badge: "v0" },
-      { id: "ref-python", title: "Python", pageId: "sdks", sectionId: "sdk-matrix", badge: "v0" },
-      { id: "ref-rust", title: "Rust (Crates.io)", pageId: "sdks", sectionId: "sdk-matrix", badge: "v0" },
-      { id: "ref-swift", title: "Swift", pageId: "sdks", sectionId: "sdk-matrix", badge: "Phase 5" },
-      { id: "ref-rest", title: "REST & RFC 9457", pageId: "sdks", sectionId: "sdk-matrix" },
+      { id: "nav-sdk-matrix", title: "SDK Compatibility Matrix", sectionId: "sdk-matrix" },
+      { id: "nav-sdk-ts", title: "TypeScript / Web & Node.js", sectionId: "sdk-ts", badge: "v0", lang: "ts" },
+      { id: "nav-sdk-kotlin", title: "Android (Kotlin & KMP)", sectionId: "sdk-kotlin", badge: "v0", lang: "kotlin" },
+      { id: "nav-sdk-dart", title: "Flutter (Dart)", sectionId: "sdk-dart", badge: "v0", lang: "dart" },
+      { id: "nav-sdk-python", title: "Python", sectionId: "sdk-python", badge: "v0", lang: "python" },
+      { id: "nav-sdk-rust", title: "Rust (Crates.io)", sectionId: "sdk-rust", badge: "v0", lang: "rust" },
+      { id: "nav-sdk-swift", title: "Swift (iOS & macOS)", sectionId: "sdk-swift", badge: "Phase 5", lang: "swift" },
+      { id: "nav-sdk-rest", title: "REST API & RFC 9457 Errors", sectionId: "sdk-rest", badge: "v1", lang: "rest" },
     ],
   },
 ];

@@ -1,59 +1,35 @@
-import { createSignal, onMount, onCleanup, For, Show } from "solid-js";
-import { DOC_PAGES } from "../data/pages";
+import { createSignal, createMemo, For, Show, onMount } from "solid-js";
+import { ALL_SECTIONS, DocSection } from "../data/pages";
 
 export default function SearchModal(props: {
   isOpen: boolean;
   onClose: () => void;
-  onSelect: (pageId: string, sectionId?: string) => void;
+  onSelectResult: (sectionId: string) => void;
 }) {
   const [query, setQuery] = createSignal("");
   let inputRef: HTMLInputElement | undefined;
 
   onMount(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
-        e.preventDefault();
-        if (props.isOpen) props.onClose();
-        else {
-          // Open search modal via parent
-        }
-      }
-      if (e.key === "Escape" && props.isOpen) {
-        props.onClose();
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
+    if (props.isOpen && inputRef) {
+      inputRef.focus();
+    }
   });
 
-  const searchResults = () => {
+  const results = createMemo((): DocSection[] => {
     const q = query().trim().toLowerCase();
-    if (!q) return [];
+    if (!q) return ALL_SECTIONS.slice(0, 8);
+    return ALL_SECTIONS.filter(
+      (sec) =>
+        sec.title.toLowerCase().includes(q) ||
+        sec.chapter.toLowerCase().includes(q) ||
+        sec.content.toLowerCase().includes(q) ||
+        (sec.lead && sec.lead.toLowerCase().includes(q)),
+    );
+  });
 
-    const results: { pageId: string; sectionId?: string; title: string; desc: string }[] = [];
-
-    for (const [pageId, page] of Object.entries(DOC_PAGES)) {
-      if (page.title.toLowerCase().includes(q) || page.overview.toLowerCase().includes(q)) {
-        results.push({
-          pageId,
-          title: page.title,
-          desc: page.overview.slice(0, 90) + "...",
-        });
-      }
-
-      for (const sec of page.sections) {
-        if (sec.title.toLowerCase().includes(q) || sec.content.toLowerCase().includes(q)) {
-          results.push({
-            pageId,
-            sectionId: sec.id,
-            title: `${page.title} › ${sec.title}`,
-            desc: sec.content.slice(0, 90) + "...",
-          });
-        }
-      }
-    }
-
-    return results;
+  const handleSelect = (sectionId: string) => {
+    props.onSelectResult(sectionId);
+    props.onClose();
   };
 
   return (
@@ -65,36 +41,62 @@ export default function SearchModal(props: {
         }}
       >
         <div class="modal-card">
-          <input
-            ref={inputRef}
-            type="text"
-            class="modal-search-input"
-            placeholder="Type a command or search documentation..."
-            value={query()}
-            onInput={(e) => setQuery(e.currentTarget.value)}
-            autofocus
-          />
+          <div style={{ display: "flex", "align-items": "center", padding: "0 16px", "border-bottom": "1px solid var(--border-color)" }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style={{ color: "var(--text-muted)" }}>
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              ref={inputRef}
+              type="text"
+              class="modal-search-input"
+              placeholder="Search documentation, methods, rules, and guides..."
+              value={query()}
+              onInput={(e) => setQuery(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") props.onClose();
+                if (e.key === "Enter" && results().length > 0) {
+                  handleSelect(results()[0].id);
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={props.onClose}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                padding: "6px 10px",
+                "font-size": "13px",
+              }}
+            >
+              ESC
+            </button>
+          </div>
 
           <div class="modal-results">
             <Show
-              when={searchResults().length > 0}
+              when={results().length > 0}
               fallback={
-                <div style={{ padding: "20px", "text-align": "center", color: "var(--text-muted)", "font-size": "13px" }}>
-                  {query() ? "No results found for '" + query() + "'" : "Search for database, auth, realtime, storage, SDKs..."}
+                <div style={{ padding: "32px", "text-align": "center", color: "var(--text-muted)", "font-size": "14px" }}>
+                  No matching documentation found for "{query()}"
                 </div>
               }
             >
-              <For each={searchResults()}>
-                {(res) => (
-                  <div
-                    class="modal-result-item"
-                    onClick={() => {
-                      props.onSelect(res.pageId, res.sectionId);
-                      props.onClose();
-                    }}
-                  >
-                    <div class="modal-result-title">{res.title}</div>
-                    <div class="modal-result-desc">{res.desc}</div>
+              <For each={results()}>
+                {(sec) => (
+                  <div class="modal-result-item" onClick={() => handleSelect(sec.id)}>
+                    <div style={{ "font-size": "11px", color: "var(--text-muted)", "font-weight": "600", "text-transform": "uppercase", "margin-bottom": "2px" }}>
+                      {sec.chapter}
+                    </div>
+                    <div style={{ "font-size": "14.5px", "font-weight": "600", color: "var(--text-primary)", "margin-bottom": "2px" }}>
+                      {sec.title}
+                    </div>
+                    <div style={{ "font-size": "12.5px", color: "var(--text-secondary)", "white-space": "nowrap", "overflow": "hidden", "text-overflow": "ellipsis" }}>
+                      {sec.lead ?? sec.content}
+                    </div>
                   </div>
                 )}
               </For>

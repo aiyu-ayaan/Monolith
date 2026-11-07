@@ -9,6 +9,7 @@
     "dev": "node tools/dev.mjs",
     "dev:server": "cargo run -p monolith-server",
     "dev:ui": "pnpm --filter @monolith/ui dev",
+    "dev:docs": "pnpm --filter @monolith/docs dev",
     "docs": "pnpm --filter @monolith/docs dev",
     "build": "pnpm build:js && pnpm rust:build",
     "build:release": "pnpm build:js && pnpm rust:release",
