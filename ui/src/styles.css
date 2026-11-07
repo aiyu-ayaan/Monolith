@@ -721,15 +721,10 @@ button.link:hover {
 /* ---------- pages ---------- */
 
 .page {
-  max-width: 1040px;
   padding: 32px;
   display: grid;
   gap: 16px;
   align-content: start;
-}
-
-.page.wide {
-  max-width: none;
 }
 
 .page-head {
