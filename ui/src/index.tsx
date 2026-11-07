@@ -15,9 +15,12 @@ import "./styles.css";
 function Shell(props: RouteSectionProps) {
   const loc = useLocation();
   const isAnalytics = () => loc.pathname === "/analytics";
+  // Inside a project the console shows only that project's navigation (Firebase-style).
+  const inApp = () => loc.pathname.startsWith("/apps/");
   return (
     <Show when={token()} fallback={<Navigate href="/login" />}>
-      <div class="shell">
+      <div class="shell" classList={{ "no-rail": inApp() }}>
+        <Show when={!inApp()}>
         <nav class="rail" aria-label="Main">
           <a href="#/" class="logo" aria-label="Monolith home">
             <Icon name="logo" size={22} />
@@ -33,6 +36,7 @@ function Shell(props: RouteSectionProps) {
             <Icon name="logout" />
           </button>
         </nav>
+        </Show>
         <main class="shell-main">{props.children}</main>
       </div>
     </Show>
