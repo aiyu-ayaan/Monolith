@@ -30,6 +30,11 @@ CREATE TABLE IF NOT EXISTS superusers (
   id BLOB PRIMARY KEY, email TEXT NOT NULL UNIQUE, hash TEXT NOT NULL, created INTEGER NOT NULL
 ) STRICT;
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value BLOB NOT NULL) STRICT;
+CREATE TABLE IF NOT EXISTS api_keys (
+  id BLOB PRIMARY KEY, app TEXT NOT NULL, name TEXT NOT NULL, prefix TEXT NOT NULL,
+  hash BLOB NOT NULL UNIQUE, scopes TEXT NOT NULL, created INTEGER NOT NULL, expires INTEGER
+) STRICT;
+CREATE INDEX IF NOT EXISTS api_keys_app ON api_keys (app, created);
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +45,7 @@ pub struct AppInfo {
 
 pub struct Registry {
     dir: PathBuf,
-    sys: SqliteStore,
+    pub(crate) sys: SqliteStore,
     apps: RwLock<HashMap<String, Arc<App>>>,
     open_lock: tokio::sync::Mutex<()>,
     token_key: Vec<u8>,
@@ -48,6 +53,8 @@ pub struct Registry {
     dummy_hash: String,
     /// One-time installer token `(token, expires µs)`, memory only (doc 18 §2).
     install: tokio::sync::Mutex<Option<(String, i64)>>,
+    /// Live API keys by SHA-256 of the secret; verification never touches the DB (doc 08 §2).
+    pub(crate) keys: RwLock<HashMap<[u8; 32], Arc<crate::apikeys::ApiKey>>>,
     /// All HTTP traffic plus every app's record ops (in memory, since start).
     pub metrics: Arc<Metrics>,
 }
@@ -60,13 +67,13 @@ fn blocking_err(e: tokio::task::JoinError) -> CoreError {
     CoreError::Internal(e.to_string())
 }
 
-fn sys_delete(sql: &str, params: Vec<Value>) -> WriteOp {
+pub(crate) fn sys_delete(sql: &str, params: Vec<Value>) -> WriteOp {
     let mut w = sys_write(sql, [0; 16], params);
     w.mutations[0].op = Op::Delete;
     w
 }
 
-fn sys_write(sql: &str, rid: Id, params: Vec<Value>) -> WriteOp {
+pub(crate) fn sys_write(sql: &str, rid: Id, params: Vec<Value>) -> WriteOp {
     WriteOp {
         actor: None,
         mutations: vec![Mutation {
@@ -128,8 +135,10 @@ impl Registry {
             .await
             .map_err(blocking_err)?
             .map_err(|e| CoreError::Internal(e.to_string()))?;
+        let keys = crate::apikeys::load(&sys).await?;
         Ok(Registry {
             dir: dir.to_owned(),
+            keys: RwLock::new(keys),
             sys,
             apps: RwLock::new(HashMap::new()),
             open_lock: tokio::sync::Mutex::new(()),
@@ -301,6 +310,7 @@ impl Registry {
             Ok(_) | Err(StoreError::NotFound) => {}
             Err(e) => return Err(e.into()),
         }
+        self.drop_api_keys(name).await?;
         let dir = self.app_dir(name);
         tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&dir) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),

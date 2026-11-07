@@ -51,6 +51,33 @@ pub struct Claims {
     pub exp_us: i64,
 }
 
+/// SHA-256, the stored form of refresh tokens and API keys (doc 08 §2).
+pub fn sha256(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    Sha256::digest(data).into()
+}
+
+/// A new API key `mk_<prefix>_<52 chars of lowercase Crockford base32>` (256 random bits).
+/// `prefix` is a short readable tag of the app, e.g. its first letters.
+pub fn new_api_key(prefix: &str) -> Result<String, AuthError> {
+    const A: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
+    let bytes = random_bytes::<32>()?;
+    let mut out = format!("mk_{prefix}_");
+    let (mut acc, mut bits) = (0u16, 0u8);
+    for b in bytes {
+        acc = acc << 8 | u16::from(b);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(A[usize::from(acc >> bits & 31)] as char);
+        }
+    }
+    if bits > 0 {
+        out.push(A[usize::from(acc << (5 - bits) & 31)] as char);
+    }
+    Ok(out)
+}
+
 /// Lowercase hex.
 pub fn hex(b: &[u8]) -> String {
     const H: &[u8; 16] = b"0123456789abcdef";
@@ -117,6 +144,15 @@ mod tests {
         assert!(verify_password("correct horse", &h));
         assert!(!verify_password("wrong", &h));
         assert!(!verify_password("x", "not a hash"));
+    }
+
+    #[test]
+    fn api_key_shape_and_hash() {
+        let k = new_api_key("demo").unwrap();
+        assert!(k.starts_with("mk_demo_"));
+        assert_eq!(k.len(), "mk_demo_".len() + 52);
+        assert_ne!(k, new_api_key("demo").unwrap());
+        assert_eq!(sha256(b"abc")[..4], [0xba, 0x78, 0x16, 0xbf]);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Apps, collections and records above the `AppStore` seam (doc 03 §2, doc 05).
 
+pub mod apikeys;
 pub mod app;
 pub mod auth_config;
 pub mod backup;
@@ -13,6 +14,7 @@ pub mod realtime;
 pub mod schema;
 pub mod system;
 
+pub use apikeys::{ApiKey, ApiKeyIn, ApiKeyInfo};
 pub use app::{
     App, BatchItem, BatchKind, ListParams, Principal, ReadOpts, RecordOut, TotalMode, WriteOpts,
 };
