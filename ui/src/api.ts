@@ -267,6 +267,7 @@ export interface Bucket {
   public: boolean;
   maxSize: number;
   allowedMime: string[];
+  maxBytes: number | null;
   created: string;
   objects: number;
   bytes: number;

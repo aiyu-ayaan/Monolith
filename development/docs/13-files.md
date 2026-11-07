@@ -52,20 +52,32 @@ Implemented with the `object_store` crate (async, multipart, streaming) behind a
 
 Firebase-Storage style buckets, not yet the record-field files of §2–§5.
 
-- Layout: `<data>/apps/<app>/files/files.db` (bucket config + one row per object: key, blob id, size, MIME,
-  SHA-256 etag) and `files/<bucket>/<blob id>` for the bytes. Bucket config is cached in memory.
+- Layout: `<data>/apps/<app>/files/files.db` (bucket config + usage counters, one row per object: key, blob hash,
+  size, MIME; a `blobs` table with a reference count per hash) and `files/blobs/<h[0..2]>/<blake3 hex>` for the bytes.
+  Bucket config is cached in memory.
+- **Content addressed (§2):** the BLAKE3 of the content is the blob name and the ETag. Identical content in an app is
+  stored once, across buckets and keys; the last reference deletes the file. Quota and usage count logical size.
 - Endpoints (`api/openapi`): bucket CRUD (superuser), `GET .../objects?prefix&limit&cursor` (keyset),
-  `PUT|GET|HEAD|DELETE .../objects/{key}`. Upload is the raw body (no multipart), streamed through a bounded
-  channel to a blocking writer that hashes, enforces the bucket `maxSize` as bytes arrive, fsyncs and renames
-  into place; the metadata commit is serialized so an overwrite never orphans a blob.
+  `PUT|GET|HEAD|DELETE .../objects/{key}`, `POST .../storage:gc`. Upload is the raw body (no multipart), streamed through
+  a bounded channel to a blocking writer that hashes, enforces the bucket `maxSize` as bytes arrive, fsyncs and renames
+  into place. The metadata commit (object row, blob reference counts, bucket counters) is one atomic write, serialized
+  per app by a mutex that is held for a few statements, never during byte transfer.
+- **MIME (§3):** the first 8 KiB are sniffed (`infer`). A detected type replaces the declared one, and the bucket's
+  `allowedMime` is checked against the final type, so a renamed file is judged by what it is. Text formats that magic
+  bytes cannot identify (`text/*`, JSON, SVG) keep the declared type.
+- **Quotas:** `maxSize` per object (checked while streaming) and `maxBytes` per bucket (checked at commit, 413).
+  Bucket usage is a counter read, not a scan.
+- **Orphans:** `gc` deletes blob files no row references (older than 10 minutes) and reports referenced blobs whose file
+  is missing. It runs once in the background when an app's storage is first opened and on `POST .../storage:gc`.
+  `files/.tmp` is emptied at open.
 - Access: private bucket needs a superuser token or a key with `files:read[:bucket]`; public buckets are readable
   by key without credentials but never listable; writes need `files:write[:bucket]`. Keys cannot manage buckets.
 - Download: `ETag` + `If-None-Match`, single `Range`, `nosniff`, `Content-Security-Policy: sandbox`; only images
   (not SVG), audio, video, PDF and plain text are `inline`, everything else is `attachment`.
-- **Deviations from §2–§4:** one blob per object version (no blake3 content addressing or dedupe, so no
-  incremental-backup benefit yet); declared `Content-Type` only (no sniffing); local disk only.
-- Not yet: S3 backend and presigned URLs, per-user/rule-based access (needs end-user auth), file fields on
-  records, `_files` table, orphan GC beyond temp cleanup at open, thumbnails, quotas, delimiter listing,
-  files in backups, benchmarks (upload/download throughput and memory are unmeasured).
-- Gaps beyond this list (orphan blobs after a crash, serialized metadata commits, no quotas, storage bytes missing from metrics, single Range only): `development/TODO.md` "Known limitations".
-- Control-plane and file-metadata writes use `Mutation.coll = NO_CHANGE_LOG` (`monolith-store`): same commit, but no `_changes` row, no `seq`, no bus event, so `files.db` and `system.db` do not grow a change log.
+- Control-plane and file-metadata writes use `Mutation.coll = NO_CHANGE_LOG` (`monolith-store`): same commit, but no `_changes`
+  row, no `seq`, no bus event, so `files.db` and `system.db` do not grow a change log.
+- Data written by the first storage layout (`<bucket>/<id>` files, no counters) is migrated when the app's storage opens.
+- **Deviations from §2–§4:** local disk only; no thumbnails yet; no `_files` table (records have no file fields yet).
+- Not yet: S3 backend and presigned URLs, per-user/rule-based access (needs end-user auth), file fields on records,
+  per-app total quota, files in backups, benchmarks (upload/download throughput and memory are unmeasured).
+- More gaps: `development/TODO.md` "Known limitations".

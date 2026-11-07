@@ -1640,3 +1640,94 @@ async fn api_key_limits_allowlist_update_and_logs() {
         StatusCode::NOT_FOUND
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_dedupe_quota_and_gc_over_http() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    let bk = "/api/v1/apps/demo/buckets";
+    let r = t
+        .call(
+            Method::POST,
+            bk,
+            Some(json!({"name":"b","maxBytes":10,"allowedMime":["image/*"]})),
+            true,
+        )
+        .await;
+    assert_eq!(
+        (r.body["maxBytes"].clone(), r.body["objects"].clone()),
+        (json!(10), json!(0))
+    );
+    let su = Some(t.token.as_str());
+    let png = b"\x89PNG\r\n\x1a\n\0\0".to_vec();
+    // Declared octet-stream, real PNG: stored and served as image/png.
+    let (s, _, b) = blob(
+        &t,
+        Method::PUT,
+        &format!("{bk}/b/objects/a.png"),
+        su,
+        &[],
+        png.clone(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{}", String::from_utf8_lossy(&b));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&b).unwrap()["mime"],
+        "image/png"
+    );
+    let (_, h, _) = blob(
+        &t,
+        Method::GET,
+        &format!("{bk}/b/objects/a.png"),
+        su,
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(h["content-type"], "image/png");
+    // Quota: 10 bytes held, one more byte of a second object does not fit.
+    let (s, _, _) = blob(
+        &t,
+        Method::PUT,
+        &format!("{bk}/b/objects/b.png"),
+        su,
+        &[],
+        [png.clone(), vec![0]].concat(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
+    let (s, _, _) = blob(
+        &t,
+        Method::PUT,
+        &format!("{bk}/b/objects/x"),
+        su,
+        &[("content-type", "text/plain")],
+        b"hi".to_vec(),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "text is not an allowed type");
+    // GC is superuser-only and reports.
+    assert_eq!(
+        t.call(Method::POST, "/api/v1/apps/demo/storage:gc", None, false)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let g = t
+        .call(Method::POST, "/api/v1/apps/demo/storage:gc", None, true)
+        .await;
+    assert_eq!(
+        (
+            g.status,
+            g.body["removedFiles"].clone(),
+            g.body["missingFiles"].clone()
+        ),
+        (StatusCode::OK, json!(0), json!(0))
+    );
+}

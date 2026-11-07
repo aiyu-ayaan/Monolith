@@ -14,4 +14,4 @@ Base: `/api/v1/apps/{app}/buckets`. Keys may contain `/` (`photos/2026/a.png`); 
 
 Errors: 401 no/invalid credential or anonymous on a private bucket; 403 key lacks scope or belongs to another app; 400 bad key or MIME not in `allowedMime`; 413 over `maxSize` (default 100 MiB); 409 bucket exists or not empty.
 
-Notes: only images (not SVG), audio, video, PDF and text/plain display inline, the rest download. Keys cannot create buckets. Files are not in backups and the content type is whatever the uploader declared.
+Notes: identical files are stored once (the `etag` is the BLAKE3 of the content). The type is detected from the content when possible and replaces the declared `Content-Type`, so `allowedMime` judges what the file really is; a bucket `maxBytes` quota gives 413 too. `POST /storage:gc` (superuser) removes orphan blob files. Only images (not SVG), audio, video, PDF and text/plain display inline, the rest download. Keys cannot create buckets. Files are not in backups yet.

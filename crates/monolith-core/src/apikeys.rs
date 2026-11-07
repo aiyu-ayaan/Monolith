@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicI64, Ordering::Relaxed};
 
 use monolith_auth::{new_api_key, sha256};
 use monolith_store::id::{encode_string, new_id};
-use monolith_store::{AppStore, Id, MigrationPlan, Query, Value};
+use monolith_store::{AppStore, Id, Query, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::app::now_us;
@@ -359,29 +359,17 @@ fn from_row(r: &[Value]) -> Option<(ApiKey, [u8; 32])> {
 
 /// Adds the columns newer than the first `api_keys` layout (existing data directories).
 pub(crate) async fn migrate(sys: &monolith_store::SqliteStore) -> CoreResult<()> {
-    let have = sys
-        .query(Query {
-            sql: "SELECT name FROM pragma_table_info('api_keys')".into(),
-            params: vec![],
-        })
-        .await?;
-    let has = |c: &str| {
-        have.iter()
-            .any(|r| matches!(&r[0], Value::Text(t) if &**t == c))
-    };
-    let statements: Vec<String> = [
-        ("last_used", "INTEGER"),
-        ("rate_limit", "INTEGER"),
-        ("allowed_ips", "TEXT"),
-    ]
-    .iter()
-    .filter(|(c, _)| !has(c))
-    .map(|(c, t)| format!("ALTER TABLE api_keys ADD COLUMN {c} {t}"))
-    .collect();
-    if !statements.is_empty() {
-        sys.apply_schema(MigrationPlan { statements }).await?;
-    }
-    Ok(())
+    crate::system::ensure_columns(
+        sys,
+        "api_keys",
+        &[
+            ("last_used", "INTEGER"),
+            ("rate_limit", "INTEGER"),
+            ("allowed_ips", "TEXT"),
+        ],
+    )
+    .await
+    .map(drop)
 }
 
 pub(crate) async fn load(

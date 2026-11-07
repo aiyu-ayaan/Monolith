@@ -70,6 +70,35 @@ fn blocking_err(e: tokio::task::JoinError) -> CoreError {
     CoreError::Internal(e.to_string())
 }
 
+/// Adds the columns of `wanted` that `table` lacks (data directories older than the column).
+/// Returns whether any was added. Table and column names are code constants, never user input.
+pub(crate) async fn ensure_columns(
+    store: &SqliteStore,
+    table: &str,
+    wanted: &[(&str, &str)],
+) -> CoreResult<bool> {
+    let have = store
+        .query(Query {
+            sql: format!("SELECT name FROM pragma_table_info('{table}')").into(),
+            params: vec![],
+        })
+        .await?;
+    let statements: Vec<String> = wanted
+        .iter()
+        .filter(|(c, _)| {
+            !have
+                .iter()
+                .any(|r| matches!(&r[0], Value::Text(t) if &**t == *c))
+        })
+        .map(|(c, decl)| format!("ALTER TABLE {table} ADD COLUMN {c} {decl}"))
+        .collect();
+    if statements.is_empty() {
+        return Ok(false);
+    }
+    store.apply_schema(MigrationPlan { statements }).await?;
+    Ok(true)
+}
+
 pub(crate) fn sys_delete(sql: &str, params: Vec<Value>) -> WriteOp {
     let mut w = sys_write(sql, [0; 16], params);
     w.mutations[0].op = Op::Delete;

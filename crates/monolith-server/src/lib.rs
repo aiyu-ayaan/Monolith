@@ -456,6 +456,7 @@ pub fn router(reg: Arc<Registry>) -> Router {
             "/api/v1/apps/{app}/buckets",
             get(list_buckets).post(create_bucket),
         )
+        .route("/api/v1/apps/{app}/storage:gc", post(storage_gc))
         .route(
             "/api/v1/apps/{app}/buckets/{bucket}",
             get(get_bucket).put(replace_bucket).delete(delete_bucket),
@@ -1378,6 +1379,15 @@ async fn delete_bucket(
     let force = matches!(q.get("force").map(String::as_str), Some("true" | "1"));
     reg.files(&app).await?.delete_bucket(&bucket, force).await?;
     Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+async fn storage_gc(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(reg.files(&app).await?.gc().await?).into_response())
 }
 
 async fn list_objects(

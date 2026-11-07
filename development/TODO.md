@@ -110,9 +110,10 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Storage buckets v1: private/public buckets, streamed upload, Range/ETag download, listing; Admin UI page (`docs/13 §6`)
 - [x] API key hardening: last-used, per-key rate limit (GCRA), IP/CIDR allowlist, key update, `NO_CHANGE_LOG` writes
 - [ ] API keys follow-ups: `@request.key.*` in rules, publishable keys, rate limit for failed auth, remaining scopes (`users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp`), `monolith keys` CLI
-- [ ] Key/storage hardening (from the known limitations): key id in request logs, orphan-blob GC, per-bucket/app quotas, storage bytes in HTTP metrics, conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
-- [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, blake3
-      content addressing + dedupe, MIME sniffing, thumbnails, quotas, orphan GC, files in backups, upload/download benchmark
+- [x] Storage internals: BLAKE3 content addressing + dedupe, reference counts, bucket quota, usage counters, orphan GC,
+      MIME sniffing, migration of the first layout (`docs/13 §6`)
+- [ ] Key/storage hardening (from the known limitations): per-app quota, storage bytes in HTTP metrics, conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
+- [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, thumbnails, files in backups, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
       `since` replay from `_changes`; WebSocket + channels; filtered and per-record topics; `fields`/`expand`; `leave` events;
@@ -158,14 +159,18 @@ API keys
 - Auth failures are not rate limited, so a flood of bad keys costs one SHA-256 each and nothing else.
 
 Storage
-- Local disk only; not in backups (restore creates an app without its files). No per-user access, thumbnails, quotas or S3.
-- Not content-addressed: overwriting writes a new blob, so identical uploads are not deduplicated. MIME is as declared by the uploader.
-- Bucket usage counts scan the object index (fine for the admin UI, not for huge buckets). Upload/download are not benchmarked.
+- Local disk only; not in backups (restore creates an app without its files). No per-user access, thumbnails or S3.
+- Dedupe is per app (never across apps), and only by whole-file hash: no chunk-level dedupe.
+- The reference counts can drift if the database is edited by hand or restored from a copy; `gc` fixes orphan files but does not
+  recompute counts. Upload/download are not benchmarked.
 - Admin UI download buffers the object in the browser; uploads show no progress and run one file at a time.
 - Metadata commits are serialized per app by one mutex, so many small concurrent uploads queue on it (bytes are written in parallel,
   only the DB step waits). Each commit also costs an fsync of the blob plus a `files.db` write.
-- Crash windows leak data: a crash between the blob rename and the DB commit leaves an orphan blob; a crash before the old blob is
-  deleted leaves the replaced one. Only `files/.tmp` is cleaned at open. Needs the orphan GC scan.
+- Sniffing recognises binary formats only; HTML, SVG, JSON and other text keep the declared type, and a bucket that allows `text/*`
+  accepts any text. SVG is never shown inline.
+- Quotas: `maxSize` per object and `maxBytes` per bucket; there is no per-app total, so many buckets can still fill the disk.
+- A crash between placing a blob file and the database commit leaves an orphan file until the next `gc` (first open of the app's
+  storage, or `POST /storage:gc`); a crash after the commit but before the file delete leaves one the same way.
 - Download: only a single `Range` (multi-range is served whole), no `If-Range`, `Last-Modified` or `If-Modified-Since`.
   `Cache-Control` is `no-cache` (always revalidates); no immutable caching because keys are mutable names.
 - Upload answers 201 vs 200 by comparing `created` and `updated`, which could misreport a replace within the same microsecond.
@@ -173,7 +178,6 @@ Storage
 - HTTP metrics count storage requests as `other`; streamed uploads and downloads report 0 bytes in/out because the size is not
   known up front (only `Content-Length` is read), so the traffic charts under-count storage.
 - Not covered by tests: concurrent overwrite of one key, crash recovery, multi-range and `If-Range`, bucket delete during an upload.
-- Quotas: `maxSize` is per object only; there is no per-bucket or per-app total, so a key with `files:write` can fill the disk.
 
 Contract and SDKs (keys and storage)
 - No conformance vectors for scopes or object endpoints, no entries in `api/mcp/tools.json`, no TypeScript/Kotlin SDK methods,

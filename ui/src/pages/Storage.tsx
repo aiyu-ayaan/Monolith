@@ -21,7 +21,7 @@ export default function Storage() {
   const [extra, setExtra] = createSignal<StorageObject[]>([]);
   const [cursor, setCursor] = createSignal<string | null>(null);
   const [creating, setCreating] = createSignal(false);
-  const [f, setF] = createSignal({ name: "", public: false, maxMb: "100", mime: "" });
+  const [f, setF] = createSignal({ name: "", public: false, maxMb: "100", quotaMb: "", mime: "" });
 
   const q = () => (selected() ? { b: selected()!, p: prefix() } : null);
   const [page, { refetch: refetchObjects }] = createResource(q, async (k) => {
@@ -67,6 +67,7 @@ export default function Storage() {
         name: v.name,
         public: v.public,
         maxSize: Math.round(Number(v.maxMb) * 1024 * 1024),
+        ...(v.quotaMb ? { maxBytes: Math.round(Number(v.quotaMb) * 1024 * 1024) } : {}),
         allowedMime: v.mime.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
       });
       setCreating(false);
@@ -131,7 +132,7 @@ export default function Storage() {
           <h1>Storage</h1>
           <p class="muted">Buckets of files for this app. Upload with <code>PUT {base()}/&lt;bucket&gt;/objects/&lt;key&gt;</code> and a superuser token or an API key with <code>files:write</code>.</p>
         </div>
-        <button class="btn" onClick={() => { setF({ name: "", public: false, maxMb: "100", mime: "" }); setError(null); setCreating(true); }}>
+        <button class="btn" onClick={() => { setF({ name: "", public: false, maxMb: "100", quotaMb: "", mime: "" }); setError(null); setCreating(true); }}>
           <Icon name="storage" />
           New bucket
         </button>
@@ -140,7 +141,7 @@ export default function Storage() {
       <p class="notice">
         <Icon name="alert" size={16} />
         <span>
-          Local disk only. Public buckets let anyone who knows a key read it; listing and writes always need a credential. Per-user access rules, thumbnails and S3 are planned, and files are not part of backups yet.
+          Local disk only. Identical files are stored once. Public buckets let anyone who knows a key read it; listing and writes always need a credential. Per-user access rules, thumbnails and S3 are planned, and files are not part of backups yet.
         </span>
       </p>
       <div class="table-wrap">
@@ -150,7 +151,7 @@ export default function Storage() {
               <th scope="col">Bucket</th>
               <th scope="col">Access</th>
               <th scope="col" class="num">Objects</th>
-              <th scope="col" class="num">Size</th>
+              <th scope="col" class="num">Size / quota</th>
               <th scope="col" class="num">Max object</th>
               <th scope="col"><span class="sr-only">Actions</span></th>
             </tr>
@@ -164,7 +165,7 @@ export default function Storage() {
                   </td>
                   <td class="small">{b.public ? "Public read" : "Private"}</td>
                   <td class="num">{b.objects}</td>
-                  <td class="num">{fmtBytes(b.bytes)}</td>
+                  <td class="num">{fmtBytes(b.bytes)}{b.maxBytes ? ` / ${fmtBytes(b.maxBytes)}` : ""}</td>
                   <td class="num">{fmtBytes(b.maxSize)}</td>
                   <td class="num">
                     <button class="icon-btn danger" aria-label={`Delete bucket ${b.name}`} title="Delete bucket" disabled={busy()} onClick={() => removeBucket(b)}>
@@ -264,9 +265,14 @@ export default function Storage() {
             <input id="bmax" type="number" min="1" max="10240" required value={f().maxMb} onInput={(e) => setF({ ...f(), maxMb: e.currentTarget.value })} />
           </div>
           <div class="field">
+            <label for="bquota">Bucket quota (MB)</label>
+            <input id="bquota" type="number" min="1" value={f().quotaMb} onInput={(e) => setF({ ...f(), quotaMb: e.currentTarget.value })} />
+            <span class="help">Total size the bucket may hold, counted per object (identical files still count each time). Leave empty for no limit.</span>
+          </div>
+          <div class="field">
             <label for="bmime">Allowed types</label>
             <input id="bmime" class="mono" placeholder="image/*, application/pdf" value={f().mime} onInput={(e) => setF({ ...f(), mime: e.currentTarget.value })} />
-            <span class="help">Comma separated. Leave empty to allow every type. Types are checked as declared by the uploader.</span>
+            <span class="help">Comma separated. Leave empty to allow every type. The type is detected from the file contents when it can be, so a renamed file is judged by what it really is.</span>
           </div>
           <div class="field">
             <label>

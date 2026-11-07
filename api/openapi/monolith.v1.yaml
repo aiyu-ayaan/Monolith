@@ -950,6 +950,28 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/storage:gc:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: collectStorageGarbage
+      description: |
+        Deletes blob files that no object references (older than ten minutes) and reports referenced
+        blobs whose file is missing. Runs once in the background when an app's storage is first used.
+      responses:
+        "200":
+          description: Report
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  removedFiles: { type: integer }
+                  removedBytes: { type: integer }
+                  missingFiles: { type: integer }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api/v1/apps/{app}/buckets:
     parameters:
       - $ref: "#/components/parameters/App"
@@ -1084,7 +1106,7 @@ paths:
       description: |
         Uploads the raw request body (not multipart) and replaces any object with that key. Needs a
         superuser token or a key with `files:write`. `Content-Type` is stored and checked against the
-        bucket's `allowedMime`. The body is streamed; the bucket's `maxSize` is enforced as it arrives.
+        bucket's `allowedMime`. The body is streamed; the bucket's `maxSize` is enforced as it arrives and `maxBytes` (quota) at commit. Identical content is stored once.
       requestBody:
         required: true
         content:
@@ -1404,7 +1426,8 @@ components:
         name: { type: string, pattern: "^[a-z][a-z0-9_]{0,62}$" }
         public: { type: boolean, default: false }
         maxSize: { type: integer, minimum: 1, maximum: 10737418240, default: 104857600, description: Bytes per object }
-        allowedMime: { type: array, maxItems: 32, items: { type: string }, description: "e.g. image/png, image/*; empty allows all" }
+        allowedMime: { type: array, maxItems: 32, items: { type: string }, description: "e.g. image/png, image/*; empty allows all. Checked against the type detected from the content when there is one, else the declared type." }
+        maxBytes: { type: integer, minimum: 1, description: "Total bytes the bucket may hold, counted per object before dedupe (413 when exceeded). Omit for no limit." }
 
     Bucket:
       type: object
@@ -1414,6 +1437,7 @@ components:
         public: { type: boolean }
         maxSize: { type: integer }
         allowedMime: { type: array, items: { type: string } }
+        maxBytes: { type: [integer, "null"] }
         created: { type: string, format: date-time }
         objects: { type: integer }
         bytes: { type: integer }
@@ -1425,7 +1449,7 @@ components:
         key: { type: string }
         size: { type: integer }
         mime: { type: string }
-        etag: { type: string, description: SHA-256 of the content, hex }
+        etag: { type: string, description: BLAKE3 of the content, hex }
         created: { type: string, format: date-time }
         updated: { type: string, format: date-time }
 
