@@ -10,7 +10,6 @@ import subprocess, sys, tempfile, time, urllib.request, datetime
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BIN = os.path.join(ROOT, "target", "release", "monolith")
-SERVER_CPUS, CLIENT_CPUS = "0-3", "4-7"
 PORT = 18090
 BASE = f"http://127.0.0.1:{PORT}"
 
@@ -19,7 +18,12 @@ ap.add_argument("--warm", type=int, default=5)
 ap.add_argument("--secs", type=int, default=20)
 ap.add_argument("--reps", type=int, default=3)
 ap.add_argument("--seed", type=int, default=100_000)
+ap.add_argument("--server-cpus", default="0-3", help="taskset list for the server (e.g. 0 for a 1-core host)")
+ap.add_argument("--client-cpus", default="4-7")
+ap.add_argument("--bin", default=BIN, help="server binary to test")
+ap.add_argument("--only", default="", help="comma-separated scenario id prefixes, e.g. M1,M4")
 a = ap.parse_args()
+SERVER_CPUS, CLIENT_CPUS = a.server_cpus, a.client_cpus
 
 stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 out = os.path.join(ROOT, "bench", "results", stamp)
@@ -40,16 +44,26 @@ def http(method, path, body=None, tok=None):
         raw = f.read()
         return json.loads(raw) if raw else None
 
-def rss_kb(pid):
+def proc_status(pid):
+    d = {}
     for l in open(f"/proc/{pid}/status"):
-        if l.startswith("VmRSS"): return int(l.split()[1])
+        k, _, v = l.partition(":")
+        if k in ("VmRSS", "RssAnon", "RssFile", "VmHWM", "Threads"): d[k] = int(v.split()[0])
+    return d
+
+def rss_kb(pid):
+    return proc_status(pid)["VmRSS"]
+
+def mem(pid):
+    d = proc_status(pid)
+    return dict(rss_mb=d["VmRSS"]/1024, anon_mb=d["RssAnon"]/1024, file_mb=d["RssFile"]/1024, threads=d["Threads"])
 
 def cpu_ticks(pid):
     f = open(f"/proc/{pid}/stat").read().rsplit(")", 1)[1].split()
     return int(f[11]) + int(f[12])  # utime+stime
 
 env = {**os.environ, "MONOLITH_DATA": data, "MONOLITH_ADDR": f"127.0.0.1:{PORT}", "MONOLITH_LOG": "warn"}
-srv = subprocess.Popen(["taskset", "-c", SERVER_CPUS, BIN], env=env, stdout=subprocess.PIPE,
+srv = subprocess.Popen(["taskset", "-c", SERVER_CPUS, a.bin], env=env, stdout=subprocess.PIPE,
                        stderr=logf, text=True)
 pid = srv.pid
 def stop():
@@ -67,7 +81,7 @@ try:
     for _ in range(100):
         try: http("GET", "/api/v1/system/health"); break
         except Exception: time.sleep(0.1)
-    log("server up pid", pid)
+    log("server up pid", pid, "idle", mem(pid))
     su = http("POST", "/api/v1/system/install", {"token": tok, "email": "bench@example.com", "password": "bench-pass-1234567"})["token"]
     http("POST", "/api/v1/system/apps", {"name": "bench"}, su)
     pub = {"list": "", "view": "", "create": ""}
@@ -89,6 +103,7 @@ try:
     seed_s = time.time() - t0
     log(f"seeded {a.seed} rows in {seed_s:.1f}s = {a.seed/seed_s:.0f} rows/s (batch 500, authed superuser)")
     ids = [i for i in ids if i]
+    log("after seed", mem(pid))
     gid = http("POST", "/api/v1/apps/bench/collections/gated/records", {"title": "g", "status": "open"}, su)["id"]
     vid = ids[len(ids)//2]
     http("GET", f"/api/v1/apps/bench/collections/items/records/{vid}")  # sanity (anon)
@@ -122,6 +137,8 @@ try:
         open(f, "w").write(p.stdout)
         return json.loads(p.stdout)
 
+    if a.only:
+        scen = [x for x in scen if x[0].split()[0] in a.only.split(",")]
     for name, path, extra, c, units in scen:
         tag = re.sub(r"\W+", "_", name).strip("_")
         log(f"== {name}  c={c}")
@@ -139,27 +156,31 @@ try:
                        max=s["slowest"]*1e3,
                        cpu=cpu, rss_mb=rss_kb(pid)/1024, codes=codes, ok=ok)
             reps.append(rec)
-            log(f"   rep{r+1}: {rec['rps']:.0f} units/s  p50 {rec['p50']:.2f} p99 {rec['p99']:.2f} max {rec['max']:.1f} ms  cpu {cpu:.0f}%  rss {rec['rss_mb']:.0f}MB  codes {codes}")
+            rec.update(mem(pid))
+            log(f"   rep{r+1}: {rec['rps']:.0f} units/s  p50 {rec['p50']:.2f} p99 {rec['p99']:.2f} max {rec['max']:.1f} ms  cpu {cpu:.0f}%  rss {rec['rss_mb']:.0f}MB (anon {rec['anon_mb']:.0f}, file {rec['file_mb']:.0f}) thr {rec['threads']}  codes {codes}")
         results[name] = dict(conns=c, units=units, reps=reps)
 
     # open-loop latency: 50% of M1 median throughput, constant arrival rate
-    m1 = results["M1 view by id, public"]["reps"]
-    q = int(st.median(r["reqps"] for r in m1) * 0.5)
-    log(f"== M1 open-loop @ {q} qps (50% of max)")
-    tag = "M1_openloop"; oha(f"{R}/collections/items/records/{vid}", ["-q", str(q)], 64, a.warm, tag + "_warm")
-    reps = []
-    for r in range(a.reps):
-        j = oha(f"{R}/collections/items/records/{vid}", ["-q", str(q)], 64, a.secs, f"{tag}_r{r+1}")
-        p = j["latencyPercentiles"]
-        reps.append(dict(rps=j["summary"]["requestsPerSec"], reqps=j["summary"]["requestsPerSec"], success=j["summary"]["successRate"],
-                         p50=p["p50"]*1e3, p90=p["p90"]*1e3, p99=p["p99"]*1e3, p999=p.get("p99.9", float("nan"))*1e3,
-                         max=j["summary"]["slowest"]*1e3, cpu=0, rss_mb=rss_kb(pid)/1024, codes=j.get("statusCodeDistribution", {})))
-        log(f"   rep{r+1}: {reps[-1]['rps']:.0f} rps p50 {reps[-1]['p50']:.2f} p99 {reps[-1]['p99']:.2f} p99.9 {reps[-1]['p999']:.2f} max {reps[-1]['max']:.1f} ms")
-    results[f"M1 open-loop @{q}qps"] = dict(conns=64, units=1, reps=reps)
+    m1 = results.get("M1 view by id, public", {}).get("reps", [])
+    if m1:
+        q = int(st.median(r["reqps"] for r in m1) * 0.5)
+        log(f"== M1 open-loop @ {q} qps (50% of max)")
+        tag = "M1_openloop"; oha(f"{R}/collections/items/records/{vid}", ["-q", str(q)], 64, a.warm, tag + "_warm")
+        reps = []
+        for r in range(a.reps):
+            j = oha(f"{R}/collections/items/records/{vid}", ["-q", str(q)], 64, a.secs, f"{tag}_r{r+1}")
+            p = j["latencyPercentiles"]
+            reps.append(dict(rps=j["summary"]["requestsPerSec"], reqps=j["summary"]["requestsPerSec"], success=j["summary"]["successRate"],
+                             p50=p["p50"]*1e3, p90=p["p90"]*1e3, p99=p["p99"]*1e3, p999=p.get("p99.9", float("nan"))*1e3,
+                             max=j["summary"]["slowest"]*1e3, cpu=0, rss_mb=rss_kb(pid)/1024, codes=j.get("statusCodeDistribution", {})))
+            log(f"   rep{r+1}: {reps[-1]['rps']:.0f} rps p50 {reps[-1]['p50']:.2f} p99 {reps[-1]['p99']:.2f} p99.9 {reps[-1]['p999']:.2f} max {reps[-1]['max']:.1f} ms")
+        results[f"M1 open-loop @{q}qps"] = dict(conns=64, units=1, reps=reps)
 
     rows = http("GET", f"{R}/collections/sink/records:count", None, su)
     log("sink rows after run:", rows)
-    final = dict(rss_mb=rss_kb(pid)/1024, data_mb=sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(data) for f in fs)/1e6)
+    time.sleep(35)  # past idle_checkpoint
+    log("idle after run", mem(pid))
+    final = dict(**mem(pid), peak_rss_mb=proc_status(pid)["VmHWM"]/1024, data_mb=sum(os.path.getsize(os.path.join(d, f)) for d, _, fs in os.walk(data) for f in fs)/1e6)
     log("final", final)
 finally:
     stop()
