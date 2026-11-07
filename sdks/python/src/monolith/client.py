@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import urllib.parse
 from typing import Any
 
@@ -8,6 +9,7 @@ from monolith.auth import AuthService
 from monolith.collections import Collection
 from monolith.files import FilesService
 from monolith.realtime import RealtimeService
+from monolith.session import FileSessionStore, MemorySessionStore, SessionStore
 from monolith.http import (
     BatchOperation,
     BatchResponseItem,
@@ -28,6 +30,7 @@ class MonolithClient:
         headers: dict[str, str] | None = None,
         timeout: float = 30.0,
         client: Any = None,
+        session_store: SessionStore | None = None,
     ) -> None:
         if options is None:
             if url is None:
@@ -48,10 +51,13 @@ class MonolithClient:
         self.realtime = RealtimeService(self.http)
         self._auth_services: dict[str, AuthService] = {}
         self._collections: dict[str, Collection[Any]] = {}
+        self._session_store = session_store
+        if session_store is not None:
+            self.auth()  # restores the stored session and installs auto refresh
 
     def auth(self, collection: str = "users") -> AuthService:
         if collection not in self._auth_services:
-            self._auth_services[collection] = AuthService(self.http, collection)
+            self._auth_services[collection] = AuthService(self.http, collection, self._session_store)
         return self._auth_services[collection]
 
     def collection(self, name: str) -> Collection[Any]:
@@ -87,6 +93,39 @@ class MonolithClient:
         self.close()
 
 
+class Monolith:
+    """One-line start: `mono = Monolith.init(url="https://api.example.com", app="shop")`."""
+
+    @staticmethod
+    def init(
+        url: str,
+        app: str,
+        *,
+        key: str | None = None,
+        storage: SessionStore | str | os.PathLike[str] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+        client: Any = None,
+    ) -> MonolithClient:
+        """Ready client for app users. `storage` is a SessionStore or a file path
+        (default: memory). A stored session is restored and refreshed automatically."""
+        if isinstance(storage, (str, os.PathLike)):
+            storage = FileSessionStore(storage)
+        return MonolithClient(
+            url=url,
+            app=app,
+            key=key,
+            headers=headers,
+            timeout=timeout,
+            client=client,
+            session_store=storage if storage is not None else MemorySessionStore(),
+        )
+
+
+def init(*args: Any, **kwargs: Any) -> MonolithClient:
+    return Monolith.init(*args, **kwargs)
+
+
 def create_client(
     options: ClientOptions | None = None,
     *,
@@ -97,6 +136,7 @@ def create_client(
     headers: dict[str, str] | None = None,
     timeout: float = 30.0,
     client: Any = None,
+    session_store: SessionStore | None = None,
 ) -> MonolithClient:
     return MonolithClient(
         options=options,
@@ -107,4 +147,5 @@ def create_client(
         headers=headers,
         timeout=timeout,
         client=client,
+        session_store=session_store,
     )

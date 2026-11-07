@@ -135,6 +135,8 @@ class HttpClient:
         timeout: float = 30.0,
         client: httpx.Client | None = None,
     ) -> None:
+        # Set by AuthService for app users: ensure_fresh() and refresh_after_unauthorized(token).
+        self.auth_hook: Any = None
         if options is not None:
             self.base_url = options.url.rstrip("/")
             self.app = options.app
@@ -209,6 +211,31 @@ class HttpClient:
         body: Any = None,
         headers: dict[str, str] | None = None,
         content: bytes | str | None = None,
+        auth_retry: bool = True,
+    ) -> Any:
+        """With an app-user session: refreshes a near-expiry token first and retries once after a 401."""
+        hook = self.auth_hook
+        if hook is None or not auth_retry or (
+            headers and any(k.lower() == "authorization" for k in headers)
+        ):
+            return self._send(method, path, query, body, headers, content)
+        hook.ensure_fresh()
+        used = self.token
+        try:
+            return self._send(method, path, query, body, headers, content)
+        except MonolithError as err:
+            if err.status == 401 and used and hook.refresh_after_unauthorized(used):
+                return self._send(method, path, query, body, headers, content)
+            raise
+
+    def _send(
+        self,
+        method: str,
+        path: str,
+        query: dict[str, Any] | None,
+        body: Any,
+        headers: dict[str, str] | None,
+        content: bytes | str | None,
     ) -> Any:
         url = self.build_url(path, query)
         req_headers = dict(self.default_headers)
