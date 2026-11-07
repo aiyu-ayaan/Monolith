@@ -107,7 +107,35 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/system/me:
+    get:
+      operationId: getMe
+      description: The signed-in superuser. A removed superuser's token gets 401.
+      responses:
+        "200":
+          description: Current superuser
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Superuser" }
+        "401": { $ref: "#/components/responses/Problem" }
+
   /api/v1/system/superusers:
+    get:
+      operationId: listSuperusers
+      description: All console superusers, oldest first.
+      responses:
+        "200":
+          description: Superusers
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/Superuser" }
+        "401": { $ref: "#/components/responses/Problem" }
     post:
       operationId: createSuperuser
       requestBody:
@@ -133,6 +161,20 @@ paths:
                   email: { type: string }
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/system/superusers/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: "#/components/schemas/Id" } }
+    delete:
+      operationId: deleteSuperuser
+      description: >-
+        Removes a superuser. 409 when removing yourself or the last superuser.
+        Tokens are not revoked; the removed superuser's token works until it expires (1 h).
+      responses:
+        "204": { description: Removed }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
   /api/v1/system/apps:
@@ -1211,6 +1253,13 @@ components:
           schema: { $ref: "../jsonschema/error.json" }
 
   schemas:
+    Superuser:
+      type: object
+      required: [id, email, created]
+      properties:
+        id: { $ref: "#/components/schemas/Id" }
+        email: { type: string, format: email }
+        created: { type: string, format: date-time }
     Id:
       type: string
       pattern: "^[0-7][0-9abcdefghjkmnpqrstvwxyz]{25}$"

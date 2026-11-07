@@ -84,6 +84,8 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] `pnpm dev`: backend + admin UI together (`tools/dev.mjs`), root scripts restructured
 - [x] `monolith superuser create <email>` CLI for headless setup (doc 18): password via
       no-echo prompt or piped stdin, never argv; safe next to a running server
+- [x] Superuser management: `GET /api/v1/system/superusers`, `DELETE .../superusers/{id}` (409 for self or
+      the last one, the count check is inside the DELETE), `GET /api/v1/system/me`. 1 HTTP test
 - [x] Phase 1 REST & debug follow-ups: single-relation `expand` (up to 4 hops, 1 batched query per relation per level),
       `total=none|exact|estimate`, `GET .../records:count`, `If-Match`/`ETag`/`If-None-Match` (`412`/`304`),
       `PUT` upsert, `?dry_run=true` savepoint rollback, `POST .../collections:diff`, `POST .../rules:explain`,

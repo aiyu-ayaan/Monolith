@@ -362,6 +362,65 @@ async fn edges() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn superuser_management() {
+    let t = T::new().await;
+    let me = t.call(Method::GET, "/api/v1/system/me", None, true).await;
+    assert_eq!(me.status, StatusCode::OK, "{:?}", me.body);
+    assert_eq!(me.body["email"], "root@example.com");
+    let me_id = me.body["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        t.call(Method::GET, "/api/v1/system/me", None, false)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        t.call(Method::GET, "/api/v1/system/superusers", None, false)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Self-removal and removing the last superuser are refused.
+    let path = format!("/api/v1/system/superusers/{me_id}");
+    let r = t.call(Method::DELETE, &path, None, true).await;
+    assert_eq!(r.status, StatusCode::CONFLICT, "{:?}", r.body);
+
+    let r = t
+        .call(
+            Method::POST,
+            "/api/v1/system/superusers",
+            Some(json!({"email":"Two@Example.com","password":"another long one"})),
+            true,
+        )
+        .await;
+    let two = r.body["id"].as_str().unwrap().to_owned();
+    let list = t
+        .call(Method::GET, "/api/v1/system/superusers", None, true)
+        .await;
+    let emails: Vec<_> = list.body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["email"].as_str().unwrap())
+        .collect();
+    assert_eq!(emails, ["root@example.com", "two@example.com"]);
+    assert!(list.body["items"][0].get("hash").is_none());
+
+    let path = format!("/api/v1/system/superusers/{two}");
+    let r = t.call(Method::DELETE, &path, None, false).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
+    let r = t.call(Method::DELETE, &path, None, true).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT, "{:?}", r.body);
+    let r = t.call(Method::DELETE, &path, None, true).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let list = t
+        .call(Method::GET, "/api/v1/system/superusers", None, true)
+        .await;
+    assert_eq!(list.body["items"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn first_superuser_installer() {
     let dir = tempfile::tempdir().unwrap();
     let reg = Arc::new(Registry::open(dir.path()).await.unwrap());

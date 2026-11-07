@@ -39,6 +39,10 @@ Check this list before relying on a feature; the rest of this page is the target
   64-hex string in the setup link the server prints at start-up (ask the operator for it;
   restart for a new one). 401 = wrong/expired/spent token or a superuser already exists.
   Headless: the operator runs `monolith superuser create <email>` on the host/container.
+- More superusers (superuser token): `GET /api/v1/system/superusers` lists `{id,email,created}`,
+  `POST` `{email,password}` adds one, `DELETE .../superusers/{id}` removes one (409 for yourself or
+  the last one; the removed admin's token still works until it expires, 1 h). `GET /api/v1/system/me`
+  returns the caller (401 if that superuser was removed).
 - Per-app sign-in config (superuser): `GET|PUT /api/v1/apps/{app}/auth/config` holds email/password
   settings and any number of OAuth providers (`google github apple microsoft facebook discord gitlab x
   linkedin twitch oidc`). `clientSecret` is write-only: omit it to keep the stored one, `""` clears it;

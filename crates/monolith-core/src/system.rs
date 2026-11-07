@@ -38,6 +38,14 @@ CREATE TABLE IF NOT EXISTS api_keys (
 CREATE INDEX IF NOT EXISTS api_keys_app ON api_keys (app, created);
 ";
 
+/// A console administrator (row of `superusers`, without the hash).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuperuserInfo {
+    pub id: Id,
+    pub email: String,
+    pub created_us: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppInfo {
     pub name: String,
@@ -463,6 +471,78 @@ impl Registry {
                 e => e.into(),
             })?;
         Ok(id)
+    }
+
+    /// All superusers, oldest first. Control-plane read; not a hot path.
+    pub async fn list_superusers(&self) -> CoreResult<Vec<SuperuserInfo>> {
+        self.query_superusers(
+            "SELECT id, email, created FROM superusers ORDER BY created",
+            vec![],
+        )
+        .await
+    }
+
+    pub async fn superuser(&self, id: Id) -> CoreResult<SuperuserInfo> {
+        self.query_superusers(
+            "SELECT id, email, created FROM superusers WHERE id = ?",
+            vec![Value::Blob(id.into())],
+        )
+        .await?
+        .pop()
+        .ok_or(CoreError::NotFound("superuser"))
+    }
+
+    async fn query_superusers(
+        &self,
+        sql: &str,
+        params: Vec<Value>,
+    ) -> CoreResult<Vec<SuperuserInfo>> {
+        let rows = self
+            .sys
+            .query(Query {
+                sql: sql.into(),
+                params,
+            })
+            .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| match (&r[0], &r[1], &r[2]) {
+                (Value::Blob(id), Value::Text(email), Value::Int(created)) => Some(SuperuserInfo {
+                    id: <[u8; 16]>::try_from(&id[..]).ok()?,
+                    email: email.to_string(),
+                    created_us: *created,
+                }),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Removes a superuser. `by` (the caller) cannot remove itself, and the last superuser
+    /// stays, so the console never locks everyone out.
+    // shortcut: tokens are not revoked; the removed admin's token works until it expires (1 h).
+    pub async fn delete_superuser(&self, id: &str, by: Id) -> CoreResult<()> {
+        let id = monolith_store::id::decode(id).ok_or(CoreError::NotFound("superuser"))?;
+        if id == by {
+            return Err(CoreError::Conflict("you cannot remove yourself".into()));
+        }
+        // The count check sits in the statement, so two concurrent deletes cannot remove both.
+        let res = self
+            .sys
+            .write(sys_delete(
+                "DELETE FROM superusers WHERE id = ? AND (SELECT count(*) FROM superusers) > 1",
+                vec![Value::Blob(id.into())],
+            ))
+            .await;
+        match res {
+            Ok(_) => Ok(()),
+            Err(StoreError::NotFound) => {
+                self.superuser(id).await?;
+                Err(CoreError::Conflict(
+                    "the last superuser cannot be removed".into(),
+                ))
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Issues the one-time installer token when no superuser exists (PocketBase-style

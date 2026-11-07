@@ -17,8 +17,9 @@ use monolith_core::codec::format_us;
 use monolith_core::{
     ApiKey, ApiKeyIn, AppInfo, Auth, BatchItem, BatchKind, CollectionDef, CoreError,
     ExplainQueryReq, ExplainRuleReq, ListParams, Principal, ReadOpts, RecordOut, Registry, ReqKind,
-    RequestLog, TotalMode, Value, WriteOpts,
+    RequestLog, SuperuserInfo, TotalMode, Value, WriteOpts,
 };
+use monolith_store::Id;
 use monolith_store::id::{decode as decode_id, encode_string, new_id};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -415,7 +416,15 @@ pub fn router(reg: Arc<Registry>) -> Router {
         )
         .route("/api/v1/system/auth/login", post(login))
         .route("/api/v1/system/install", get(install_status).post(install))
-        .route("/api/v1/system/superusers", post(create_superuser))
+        .route("/api/v1/system/me", get(me))
+        .route(
+            "/api/v1/system/superusers",
+            get(list_superusers).post(create_superuser),
+        )
+        .route(
+            "/api/v1/system/superusers/{id}",
+            axum::routing::delete(delete_superuser),
+        )
         .route("/api/v1/system/apps", get(list_apps).post(create_app))
         .route("/api/v1/system/apps/{app}", get(get_app).delete(delete_app))
         .route(
@@ -544,6 +553,49 @@ async fn create_superuser(
     let id = reg.create_superuser(&c.email, &c.password).await?;
     let out = json!({"id": encode_string(&id), "email": c.email.trim().to_ascii_lowercase()});
     Ok((StatusCode::CREATED, axum::Json(out)).into_response())
+}
+
+/// The calling superuser's id; API keys and anonymous callers get 401.
+fn su_id(reg: &Registry, headers: &HeaderMap) -> ApiResult<Id> {
+    bearer(headers)?
+        .filter(|t| !t.starts_with("mk_"))
+        .and_then(|t| reg.verify_superuser(t))
+        .ok_or(ApiError(CoreError::Unauthorized))
+}
+
+fn superuser_json(u: &SuperuserInfo) -> serde_json::Value {
+    json!({"id": encode_string(&u.id), "email": u.email, "created": format_us(u.created_us)})
+}
+
+async fn me(State(reg): St, headers: HeaderMap) -> ApiResult<Response> {
+    let id = su_id(&reg, &headers)?;
+    // A removed superuser's token stays valid until expiry; it has no account to show.
+    let u = reg.superuser(id).await.map_err(|e| match e {
+        CoreError::NotFound(_) => ApiError(CoreError::Unauthorized),
+        e => ApiError(e),
+    })?;
+    Ok(axum::Json(superuser_json(&u)).into_response())
+}
+
+async fn list_superusers(State(reg): St, headers: HeaderMap) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let items: Vec<_> = reg
+        .list_superusers()
+        .await?
+        .iter()
+        .map(superuser_json)
+        .collect();
+    Ok(axum::Json(json!({"items": items})).into_response())
+}
+
+async fn delete_superuser(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> ApiResult<Response> {
+    let by = su_id(&reg, &headers)?;
+    reg.delete_superuser(&id, by).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 fn app_json(a: &AppInfo) -> serde_json::Value {

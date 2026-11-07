@@ -29,4 +29,4 @@ pub use metrics::{Metrics, ReqKind};
 pub use monolith_rules::Auth;
 pub use monolith_store::Value;
 pub use schema::{Collection, CollectionDef, Schema};
-pub use system::{AppInfo, Registry};
+pub use system::{AppInfo, Registry, SuperuserInfo};
