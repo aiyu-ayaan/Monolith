@@ -55,9 +55,12 @@ export interface BatchResponseItem {
 }
 
 export interface RealtimeEvent<T = RecordModel> {
-  action: "create" | "update" | "delete";
+  /** `leave`: the record stopped matching your filter or rule (it was not deleted). */
+  action: "create" | "update" | "delete" | "leave";
   record: T;
   collection: string;
+  /** Change-log sequence number; resume point after a reconnect. */
+  seq?: number;
 }
 
 export interface RealtimeListener<T = RecordModel> {
@@ -65,7 +68,31 @@ export interface RealtimeListener<T = RecordModel> {
 }
 
 export interface RealtimeSubscriptionOptions {
+  /** Filter expression (same syntax as `list({ filter })`); only matching records arrive. */
   filter?: string;
+  /** Only these record ids. */
+  ids?: string[];
+}
+
+export interface DocumentChange<T = RecordModel> {
+  type: "added" | "modified" | "removed";
+  doc: T;
+}
+
+export interface QuerySnapshot<T = RecordModel> {
+  /** The current result set, in order. */
+  docs: T[];
+  /** What changed since the previous snapshot (everything is `added` in the first one). */
+  changes: DocumentChange<T>[];
+}
+
+export interface SnapshotOptions {
+  filter?: string;
+  /** Sort expression, e.g. `-created`. Also applied client-side to live changes. */
+  sort?: string;
+  /** Records in the initial result (server cap 1000). Default 100. */
+  limit?: number;
+  onError?: (error: Error) => void;
 }
 
 export interface StorageObject {

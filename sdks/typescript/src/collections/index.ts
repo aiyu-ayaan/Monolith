@@ -6,8 +6,10 @@ import type {
   ListResult,
   RealtimeEvent,
   RealtimeListener,
+  QuerySnapshot,
   RealtimeSubscriptionOptions,
   RecordModel,
+  SnapshotOptions,
 } from "../http/types.js";
 import type { RealtimeService } from "../realtime/index.js";
 
@@ -76,5 +78,26 @@ export class Collection<T = RecordModel> {
     }
     return this.realtime.subscribe<T>(this.name, listener, options);
   }
-}
 
+  /**
+   * Firestore-style listener: the current result set first, then a new snapshot after every
+   * change. Pass `filter`/`sort`/`limit` to narrow it. Returns the unsubscribe function.
+   */
+  onSnapshot(
+    callback: (snapshot: QuerySnapshot<T & RecordModel>) => void,
+    options?: SnapshotOptions,
+  ): () => void {
+    if (!this.realtime) {
+      throw new Error("Realtime service is not available on this client instance.");
+    }
+    return this.realtime.onSnapshot<T & RecordModel>(this.name, callback, options);
+  }
+
+  /** Listens to one record: calls back with it (or `null` once deleted or no longer visible). */
+  onDocSnapshot(id: string, callback: (doc: (T & RecordModel) | null) => void): () => void {
+    return this.onSnapshot(
+      (snap) => callback(snap.docs[0] ?? null),
+      { filter: `id = '${id.replace(/'/g, "")}'`, limit: 1 },
+    );
+  }
+}

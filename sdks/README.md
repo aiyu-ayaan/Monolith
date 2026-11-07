@@ -37,6 +37,9 @@ Detailed breakdown of capabilities implemented across the official client SDKs:
 | | Per-collection subscription (`subscribe()`) | [x] | [x] | [x] | Planned | Planned | [ ] |
 | | Reconnection with exponential backoff & jitter | [x] | [x] | [x] | Planned | Planned | [ ] |
 | | Automatic connection lifecycle (ref-counted) | [x] | [x] | [x] | Planned | Planned | [ ] |
+| | Filtered / per-record subscription (`filter`, `ids`) | [x] | Planned | Planned | Planned | Planned | [ ] |
+| | Snapshot listener (`onSnapshot`, `onDocSnapshot`) | [x] | Planned | Planned | Planned | Planned | [ ] |
+| | Gap-free resume after reconnect (`since`) and `leave` events | [x] | Planned | Planned | Planned | Planned | [ ] |
 | **Analytics** | Event tracking (`track()`) | [x] | [x] | [x] | [x] | Planned | [ ] |
 | | In-memory queue buffering | [x] | [x] | [x] | [x] | Planned | [ ] |
 | | Periodic interval flush | [x] | [x] | [x] | [x] | Planned | [ ] |
@@ -72,7 +75,8 @@ Detailed breakdown of capabilities implemented across the official client SDKs:
 ### 4. Realtime Streaming
 - **Single Multiplexed Connection**: Shares a single persistent Server-Sent Events (SSE) connection per app rather than opening separate sockets per collection.
 - **Demand-Driven Lifecycle**: Opens the SSE stream on the first collection subscription; closes the stream automatically when all subscribers unsubscribe.
-- **Resilient Reconnection**: Exponential backoff with randomized jitter handles network drops and backend restarts.
+- **Resilient Reconnection**: Exponential backoff with randomized jitter handles network drops and backend restarts. Plain subscriptions resume with `since=<last seq>`; snapshot listeners re-snapshot.
+- **Snapshot Listeners (TypeScript)**: `collection.onSnapshot(cb, { filter, sort, limit })` calls back with the current result set, then after every change with `docs` and `changes` (`added`/`modified`/`removed`). `onDocSnapshot(id, cb)` watches one record.
 
 ### 5. Analytics & Event Queue
 - **Buffered Event Pipeline**: Ingest analytics events via `mono.analytics.track("event_name", { properties })`.
