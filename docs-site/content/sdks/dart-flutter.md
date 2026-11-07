@@ -1,8 +1,8 @@
 ---
-title: Dart and Flutter
+title: Guide
 description: The pure Dart client and the Flutter layer with secure storage and sign-in widgets.
-group: Guides
-order: 40
+group: Dart and Flutter
+order: 10
 ---
 
 `monolith_client` is pure Dart (server, CLI, Flutter). `monolith_flutter` adds secure session storage, deep-link handling and widgets.

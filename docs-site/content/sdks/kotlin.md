@@ -1,8 +1,8 @@
 ---
-title: Kotlin and Android
+title: Guide
 description: Kotlin Multiplatform core, Android storage and Jetpack Compose sign-in.
-group: Guides
-order: 30
+group: Kotlin and Android
+order: 10
 ---
 
 Three modules: `monolith-core` (JVM, pure Kotlin on Ktor), `monolith-android` (encrypted session, Custom Tab, redirect activity) and `monolith-compose` (Material 3 sign-in).

@@ -1,8 +1,8 @@
 ---
-title: TypeScript
+title: Guide
 description: Browser, Node and React usage of @monolith/client.
-group: Guides
-order: 20
+group: TypeScript
+order: 10
 ---
 
 `@monolith/client` works in browsers and Node 20+. Subpath `@monolith/client/ui` adds `<monolith-auth>` and `@monolith/client/react` adds hooks and components.

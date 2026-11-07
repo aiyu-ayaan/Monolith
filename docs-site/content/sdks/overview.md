@@ -61,7 +61,7 @@ let mono = Monolith::init("https://api.example.com", "shop")?;
 | Upload file | `files.upload(b, k, data)` | `files.upload(b, k, bytes)` | `files.upload(b, k, data)` | `files.upload(b, k, data)` | `files().upload(b, k, data, ct)` |
 | Sign in | `auth.signIn({email, password})` | `auth.signIn(email, password)` | `auth().signIn(email, password)` | `auth().sign_in(email, password)` | `auth().sign_in(email, password)` |
 
-Full signatures are in the API reference for each SDK.
+Full signatures are in each SDK's pages: Set up, Authentication, Database, Realtime, Storage and Errors.
 
 ## Limits and status
 
@@ -71,6 +71,6 @@ No SDK is published to a package registry yet; use the repository. The TypeScrip
 
 ## Next steps
 
-- API reference: [TypeScript](/sdks/reference/typescript), [Kotlin](/sdks/reference/kotlin), [Dart and Flutter](/sdks/reference/dart-flutter), [Python](/sdks/reference/python), [Rust](/sdks/reference/rust)
+- API reference: [TypeScript](/sdks/typescript/setup), [Kotlin and Android](/sdks/kotlin/setup), [Dart and Flutter](/sdks/dart-flutter/setup), [Python](/sdks/python/setup), [Rust](/sdks/rust/setup)
 - Guides: [TypeScript](/sdks/typescript), [Kotlin](/sdks/kotlin), [Dart and Flutter](/sdks/dart-flutter), [Python](/sdks/python), [Rust](/sdks/rust)
 - [Authentication overview](/build/auth/overview)

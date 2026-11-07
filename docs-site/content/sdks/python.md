@@ -1,8 +1,8 @@
 ---
-title: Python
+title: Guide
 description: Synchronous client built on httpx for scripts and servers.
-group: Guides
-order: 50
+group: Python
+order: 10
 ---
 
 Python 3.10+. The client is synchronous.
