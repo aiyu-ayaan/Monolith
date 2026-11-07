@@ -42,6 +42,63 @@ pub fn write_str(out: &mut Vec<u8>, s: &str) {
 
 /// µs since epoch → `YYYY-MM-DDTHH:MM:SS.ffffffZ`.
 pub fn format_us(us: i64) -> String {
+    match format_us_fixed(us) {
+        // ASCII digits and separators only.
+        Some(b) => b.iter().map(|&c| c as char).collect(),
+        None => format_us_slow(us),
+    }
+}
+
+/// Appends the quoted timestamp; no allocation for years 0000..=9999 (every row has two dates).
+fn write_us(out: &mut Vec<u8>, us: i64) {
+    out.push(b'"');
+    match format_us_fixed(us) {
+        Some(b) => out.extend_from_slice(&b),
+        None => out.extend_from_slice(format_us_slow(us).as_bytes()),
+    }
+    out.push(b'"');
+}
+
+/// `(year, month, day, second of day)`; Howard Hinnant's civil_from_days.
+fn civil(us: i64) -> (i64, i64, i64, i64) {
+    let secs = us.div_euclid(1_000_000);
+    let days = secs.div_euclid(86_400);
+    let sod = secs.rem_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (yoe + era * 400 + i64::from(m <= 2), m, d, sod)
+}
+
+/// Fixed 27-byte form, or `None` outside years 0000..=9999.
+fn format_us_fixed(us: i64) -> Option<[u8; 27]> {
+    let (y, m, d, sod) = civil(us);
+    if !(0..=9999).contains(&y) {
+        return None;
+    }
+    let mut b = *b"0000-00-00T00:00:00.000000Z";
+    let mut put = |at: usize, width: usize, mut v: i64| {
+        for i in (at..at + width).rev() {
+            b[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+    };
+    put(0, 4, y);
+    put(5, 2, m);
+    put(8, 2, d);
+    put(11, 2, sod / 3600);
+    put(14, 2, sod / 60 % 60);
+    put(17, 2, sod % 60);
+    put(20, 6, us.rem_euclid(1_000_000));
+    Some(b)
+}
+
+fn format_us_slow(us: i64) -> String {
     let secs = us.div_euclid(1_000_000);
     let frac = us.rem_euclid(1_000_000);
     let days = secs.div_euclid(86_400);
@@ -71,7 +128,7 @@ fn write_value(out: &mut Vec<u8>, kind: Option<FieldType>, v: &Value) {
         (Some(FieldType::Bool), Value::Int(i)) => {
             out.extend_from_slice(if *i != 0 { b"true" } else { b"false" })
         }
-        (Some(FieldType::Date), Value::Int(us)) => write_str(out, &format_us(*us)),
+        (Some(FieldType::Date), Value::Int(us)) => write_us(out, *us),
         (Some(FieldType::Json), Value::Text(s)) => out.extend_from_slice(s.as_bytes()),
         (_, Value::Int(i)) => {
             let _ = write!(out, "{i}");
@@ -622,6 +679,34 @@ fn valid_email(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_date_format_matches_slow_path() {
+        let edges = [
+            0,
+            -1,
+            1,
+            951_782_400_000_000,     // 2000-02-29
+            -62_167_219_200_000_000, // 0000-01-01
+            -62_167_219_200_000_001, // year -1: slow path
+            253_402_300_799_999_999, // 9999-12-31T23:59:59.999999
+            253_402_300_800_000_000, // 10000-01-01: slow path
+            1_794_000_000_123_456,
+        ];
+        let mut x: i64 = 0x2545_f491_4f6c_dd1d;
+        let steps = (0..2000).map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x.rem_euclid(320_000_000_000_000_000) - 62_000_000_000_000_000
+        });
+        for us in edges.into_iter().chain(steps) {
+            assert_eq!(format_us(us), format_us_slow(us), "{us}");
+            let mut out = Vec::new();
+            write_us(&mut out, us);
+            assert_eq!(out, format!("\"{}\"", format_us_slow(us)).into_bytes());
+        }
+    }
 
     #[test]
     fn dates_round_trip() {
