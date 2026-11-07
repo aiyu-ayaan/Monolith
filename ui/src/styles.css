@@ -1258,6 +1258,8 @@ table.grid {
 
 .chart {
   margin: 0;
+  /* Grid items default to min-width:auto; the fixed-width SVG would then stop the card shrinking. */
+  min-width: 0;
   padding: 14px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1284,6 +1286,7 @@ table.grid {
   list-style: none;
   margin: 0;
   padding: 0;
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -1307,12 +1310,15 @@ table.grid {
 
 .chart-box {
   position: relative;
+  min-width: 0;
+  width: 100%;
   user-select: none;
 }
 
 .chart-box svg {
   display: block;
   overflow: visible;
+  max-width: 100%;
 }
 
 .grid-line {

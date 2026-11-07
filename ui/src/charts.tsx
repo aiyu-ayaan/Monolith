@@ -29,7 +29,7 @@ export function LineChart<P extends { t: number }>(p: {
   tfmt: (t: number) => string;
 }) {
   let box!: HTMLDivElement;
-  const [w, setW] = createSignal(600);
+  const [w, setW] = createSignal(320);
   const [hover, setHover] = createSignal<number | null>(null);
   onMount(() => {
     const ro = new ResizeObserver(([e]) => setW(Math.max(240, e.contentRect.width)));
