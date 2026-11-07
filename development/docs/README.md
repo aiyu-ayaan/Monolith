@@ -40,6 +40,7 @@ build phase. Reference implementation studied: PocketBase v0.40.6
 | 21 | [Repository structure](21-repository-structure.md) | Monorepo layout, API contract, user docs, npm/Android/other SDK packages |
 | 22 | [Agent skills & debuggability](22-agent-skills-and-debugging.md) | Skills pack for all AI agents, debug endpoints, MCP debug tools |
 | 23 | [Brand & logo](23-brand.md) | Keystone M logo, Monolith Red, lockups, favicon set, usage rules |
+| 24 | [SDK ergonomics and Auth UI kit](24-sdk-ux-and-auth-ui.md) | Two-line init, auth API, headless controller, drop-in sign-in screens (Compose, web, Flutter) |
 
 ## Key decisions at a glance
 
