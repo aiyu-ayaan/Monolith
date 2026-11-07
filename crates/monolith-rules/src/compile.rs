@@ -17,6 +17,7 @@ pub(crate) enum Source {
     Body(usize),
     BodyIsset(usize),
     Now,
+    Macro(crate::time::Macro),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -138,6 +139,8 @@ pub(crate) enum Node {
         op: CmpOp,
         any: bool,
         r: Term,
+        /// PocketBase: text `''` and NULL are the same value, so `col = ''` also matches NULL.
+        empty_null: bool,
         hop_root: Root,
         hops: Vec<Hop>,
     },
@@ -293,11 +296,26 @@ impl Checker<'_> {
         {
             return Err(RuleError::Type("null only works with = and !=".into()));
         }
+        let empty_null = ty == Ty::Text
+            && !any
+            && !has_multi
+            && matches!(op, CmpOp::Eq | CmpOp::Ne)
+            && (is_empty_lit(&l, &self.params) != is_empty_lit(&r, &self.params));
+        if empty_null {
+            for t in [&l, &r] {
+                if let Term::Param { idx, .. } = t
+                    && self.params[*idx].src == Source::Lit(Value::Null)
+                {
+                    self.params[*idx].src = Source::Lit(Value::Text("".into()));
+                }
+            }
+        }
         Ok(Node::Cmp {
             l,
             op,
             any,
             r,
+            empty_null,
             hop_root,
             hops,
         })
@@ -424,6 +442,11 @@ impl Checker<'_> {
                 ["@now"] => {
                     self.see(Class::AuthOnly);
                     return typed_param(self, Source::Now, Ty::Date);
+                }
+                [m] if crate::time::Macro::parse(m).is_some() => {
+                    let m = crate::time::Macro::parse(m).expect("checked");
+                    self.see(Class::AuthOnly);
+                    return typed_param(self, Source::Macro(m), m.ty());
                 }
                 ["@request", "auth", "id"] => {
                     self.see(Class::AuthOnly);
@@ -715,6 +738,13 @@ fn is_null(t: &Term, params: &[Param]) -> bool {
     matches!(t, Term::Param { idx, .. } if params[*idx].src == Source::Lit(Value::Null))
 }
 
+/// Literal `null` or `''`.
+fn is_empty_lit(t: &Term, params: &[Param]) -> bool {
+    matches!(t, Term::Param { idx, .. }
+        if matches!(&params[*idx].src, Source::Lit(Value::Null))
+            || matches!(&params[*idx].src, Source::Lit(Value::Text(s)) if s.is_empty()))
+}
+
 impl Param {
     pub(crate) fn resolve(&self, ctx: &Ctx<'_>) -> Value {
         let raw = match &self.src {
@@ -743,6 +773,7 @@ impl Param {
                 Value::Int(i64::from(set))
             }
             Source::Now => Value::Int(ctx.now_us),
+            Source::Macro(m) => Value::Int(m.eval(ctx.now_us)),
         };
         // Coerce request values to the checked type so SQL and memory never see a
         // cross-type comparison; a mismatch becomes NULL.
@@ -763,15 +794,36 @@ impl Param {
     }
 }
 
+/// PocketBase `~` semantics: a value with an unescaped `%` is used as the LIKE pattern as
+/// given; otherwise it is wrapped in `%…%` with `_` and a lone `\` escaped. `\%`, `\_`, `\\`
+/// are kept as escape pairs.
 fn like_pattern(s: &str) -> String {
     let mut p = String::with_capacity(s.len() + 2);
-    p.push('%');
-    for c in s.chars() {
-        if matches!(c, '%' | '_' | '\\') {
-            p.push('\\');
+    let mut wild = false;
+    let mut it = s.chars().peekable();
+    while let Some(c) = it.next() {
+        match c {
+            '\\' => match it.peek() {
+                Some(&n @ ('%' | '_' | '\\')) => {
+                    it.next();
+                    p.push('\\');
+                    p.push(n);
+                }
+                _ => p.push_str("\\\\"),
+            },
+            '%' => {
+                wild = true;
+                p.push('%');
+            }
+            '_' => p.push_str("\\_"),
+            c => p.push(c),
         }
-        p.push(c);
     }
+    if wild {
+        // The caller's own pattern: `_` stays a wildcard too.
+        return s.to_owned();
+    }
+    p.insert(0, '%');
     p.push('%');
     p
 }
@@ -804,8 +856,24 @@ fn renumber(n: &mut Node, pos: &[usize]) {
     }
 }
 
-fn emit_cmp(l: &Term, op: CmpOp, r: &Term, order: &mut Vec<usize>, out: &mut String) {
-    term(l, order, out);
+fn emit_cmp(
+    l: &Term,
+    op: CmpOp,
+    r: &Term,
+    empty_null: bool,
+    order: &mut Vec<usize>,
+    out: &mut String,
+) {
+    let side = |t: &Term, order: &mut Vec<usize>, out: &mut String| {
+        if empty_null {
+            out.push_str("COALESCE(");
+            term(t, order, out);
+            out.push_str(", '')");
+        } else {
+            term(t, order, out);
+        }
+    };
+    side(l, order, out);
     out.push_str(match op {
         CmpOp::Eq => " IS ",
         CmpOp::Ne => " IS NOT ",
@@ -816,7 +884,7 @@ fn emit_cmp(l: &Term, op: CmpOp, r: &Term, order: &mut Vec<usize>, out: &mut Str
         CmpOp::Like => " LIKE ",
         CmpOp::NotLike => " NOT LIKE ",
     });
-    term(r, order, out);
+    side(r, order, out);
     if matches!(op, CmpOp::Like | CmpOp::NotLike) {
         out.push_str(" ESCAPE '\\'");
     }
@@ -882,6 +950,7 @@ fn emit_inner(
             op,
             any,
             r,
+            empty_null,
             hop_root,
             hops,
         } => {
@@ -905,13 +974,13 @@ fn emit_inner(
                 out.push_str(" AND NOT ");
                 with_hops(&root_alias, hops, out, |out| {
                     out.push_str("NOT (");
-                    emit_cmp(l, *op, r, order, out);
+                    emit_cmp(l, *op, r, *empty_null, order, out);
                     out.push_str(" IS TRUE)");
                 });
                 out.push(')');
             } else {
                 with_hops(&root_alias, hops, out, |out| {
-                    emit_cmp(l, *op, r, order, out)
+                    emit_cmp(l, *op, r, *empty_null, order, out)
                 });
             }
         }

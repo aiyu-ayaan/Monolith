@@ -26,9 +26,25 @@ fn node(n: &Node, row: &[Value], bound: &[Value]) -> bool {
         Node::True => true,
         Node::And(a, b) => node(a, row, bound) && node(b, row, bound),
         Node::Or(a, b) => node(a, row, bound) || node(b, row, bound),
-        Node::Cmp { l, op, r, .. } => {
+        Node::Cmp {
+            l,
+            op,
+            r,
+            empty_null,
+            ..
+        } => {
             let (l, r) = (value(l, row, bound), value(r, row, bound));
             let (l, r) = (l.as_ref(), r.as_ref());
+            // PocketBase: text NULL and '' are the same value.
+            let empty = Value::Text("".into());
+            let (l, r) = if *empty_null {
+                (
+                    if matches!(l, Value::Null) { &empty } else { l },
+                    if matches!(r, Value::Null) { &empty } else { r },
+                )
+            } else {
+                (l, r)
+            };
             match op {
                 CmpOp::Eq => is(l, r),
                 CmpOp::Ne => !is(l, r),
@@ -113,25 +129,54 @@ fn cmp(a: &Value, b: &Value) -> Option<Ordering> {
     })
 }
 
-/// `hay LIKE '%needle%' ESCAPE '\'`, the only pattern shape the compiler emits.
+/// `hay LIKE pat ESCAPE '\'`: `%` any run, `_` any one char, `\x` literal `x`.
 /// SQLite LIKE folds ASCII case only.
 fn like(hay: &Value, pat: &Value) -> Option<bool> {
     let (Value::Text(h), Value::Text(p)) = (hay, pat) else {
         return None;
     };
-    let inner = p.strip_prefix('%')?.strip_suffix('%')?;
-    let mut needle = String::with_capacity(inner.len());
-    let mut esc = false;
-    for c in inner.chars() {
-        if c == '\\' && !esc {
-            esc = true;
-            continue;
+    let h: Vec<char> = h.to_ascii_lowercase().chars().collect();
+    let p: Vec<char> = p.to_ascii_lowercase().chars().collect();
+    // Iterative glob match with one backtrack point (last `%`).
+    let (mut hi, mut pi) = (0, 0);
+    let mut star: Option<(usize, usize)> = None;
+    while hi < h.len() {
+        match p.get(pi) {
+            Some('%') => {
+                star = Some((pi, hi));
+                pi += 1;
+                continue;
+            }
+            Some('_') => {}
+            Some('\\') if p.get(pi + 1) == Some(&h[hi]) => pi += 1,
+            Some('\\') => {
+                // Escape of a different char: no match here.
+                match star {
+                    Some((sp, sh)) => {
+                        pi = sp + 1;
+                        hi = sh + 1;
+                        star = Some((sp, sh + 1));
+                        continue;
+                    }
+                    None => return Some(false),
+                }
+            }
+            Some(&c) if c == h[hi] => {}
+            _ => match star {
+                Some((sp, sh)) => {
+                    pi = sp + 1;
+                    hi = sh + 1;
+                    star = Some((sp, sh + 1));
+                    continue;
+                }
+                None => return Some(false),
+            },
         }
-        esc = false;
-        needle.push(c);
+        hi += 1;
+        pi += 1;
     }
-    Some(
-        h.to_ascii_lowercase()
-            .contains(&needle.to_ascii_lowercase()),
-    )
+    while p.get(pi) == Some(&'%') {
+        pi += 1;
+    }
+    Some(pi == p.len())
 }
