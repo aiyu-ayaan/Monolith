@@ -629,6 +629,9 @@ impl Writer {
                     .prepare_cached(aux_sql)?
                     .execute(params_from_iter(aux_params.iter()))?;
             }
+            if m.coll == crate::NO_CHANGE_LOG {
+                continue;
+            }
             self.next_seq += 1;
             self.hlc = hlc;
             self.conn.prepare_cached(INSERT_CHANGE)?.execute((

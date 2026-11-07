@@ -47,6 +47,11 @@ impl Op {
     }
 }
 
+/// `Mutation::coll` value for tables that are not records (control plane, file metadata): the
+/// statement runs in the same commit, but no `_changes` row is written and no `seq` is consumed,
+/// so these writes never grow the change log or reach the change bus.
+pub const NO_CHANGE_LOG: u32 = u32::MAX;
+
 /// One record mutation. `sql` is a compiled template (same `Arc` per shape), never
 /// built per request; the engine caches its prepared statement by text.
 #[derive(Debug, Clone)]

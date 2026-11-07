@@ -110,8 +110,7 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Storage buckets v1: private/public buckets, streamed upload, Range/ETag download, listing; Admin UI page (`docs/13 §6`)
 - [ ] API keys follow-ups: `@request.key.*` in rules, IP allowlist, per-key rate limit, publishable keys, last-used,
       remaining scopes (`users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp`), `monolith keys` CLI
-- [ ] Key/storage hardening (from the known limitations): key id in request logs, `_changes` pruning or a no-log write path for
-      `files.db`/`system.db`, orphan-blob GC, per-bucket/app quotas, storage bytes in HTTP metrics, key update endpoint,
+- [ ] Key/storage hardening (from the known limitations): key id in request logs, orphan-blob GC, per-bucket/app quotas, storage bytes in HTTP metrics, key update endpoint,
       conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
 - [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, blake3
       content addressing + dedupe, MIME sniffing, thumbnails, quotas, orphan GC, files in backups, upload/download benchmark
@@ -167,8 +166,6 @@ Storage
 - Admin UI download buffers the object in the browser; uploads show no progress and run one file at a time.
 - Metadata commits are serialized per app by one mutex, so many small concurrent uploads queue on it (bytes are written in parallel,
   only the DB step waits). Each commit also costs an fsync of the blob plus a `files.db` write.
-- Every metadata write adds a row to `_changes` in `files.db` (and bucket/key writes in `system.db`); nothing prunes it, so it grows
-  with the number of uploads. The store crate needs a "no change log" write path for non-record tables.
 - Crash windows leak data: a crash between the blob rename and the DB commit leaves an orphan blob; a crash before the old blob is
   deleted leaves the replaced one. Only `files/.tmp` is cleaned at open. Needs the orphan GC scan.
 - Download: only a single `Range` (multi-range is served whole), no `If-Range`, `Last-Modified` or `If-Modified-Since`.

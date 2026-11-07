@@ -9,8 +9,8 @@ use monolith_auth::{
 };
 use monolith_store::id::new_id;
 use monolith_store::{
-    AppStore, Error as StoreError, Id, MigrationPlan, Mutation, Op, Query, SqliteConfig,
-    SqliteStore, Value, WriteOp,
+    AppStore, Error as StoreError, Id, MigrationPlan, Mutation, NO_CHANGE_LOG, Op, Query,
+    SqliteConfig, SqliteStore, Value, WriteOp,
 };
 
 use crate::app::{App, now_us};
@@ -80,7 +80,7 @@ pub(crate) fn sys_write(sql: &str, rid: Id, params: Vec<Value>) -> WriteOp {
         actor: None,
         mutations: vec![Mutation {
             op: Op::Insert,
-            coll: 0,
+            coll: NO_CHANGE_LOG,
             rid,
             fields: None,
             sql: sql.into(),
@@ -291,7 +291,7 @@ impl Registry {
                 actor: None,
                 mutations: vec![Mutation {
                     op: Op::Delete,
-                    coll: 0,
+                    coll: NO_CHANGE_LOG,
                     rid: [0; 16],
                     fields: None,
                     sql: "DELETE FROM apps WHERE name = ?".into(),

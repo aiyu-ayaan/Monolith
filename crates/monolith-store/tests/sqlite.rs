@@ -308,3 +308,28 @@ async fn dry_run_returns_rows_without_committing() {
         .unwrap();
     assert_eq!(real.first_seq, 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_change_log_writes_skip_seq_and_bus() {
+    let f = fixture(SqliteConfig::default()).await;
+    let mut bus = f.store.subscribe();
+    let mut quiet = mutation(Op::Insert, &f.insert, new_id(), 1);
+    quiet.coll = monolith_store::NO_CHANGE_LOG;
+    f.store.write(single(quiet)).await.unwrap();
+    assert!(f.store.changes_since(0, 10).await.unwrap().is_empty());
+    assert!(bus.try_recv().is_err(), "nothing published");
+    // A mixed op logs only the record mutation, and seqs stay gap-free.
+    let mut quiet = mutation(Op::Insert, &f.insert, new_id(), 2);
+    quiet.coll = monolith_store::NO_CHANGE_LOG;
+    let logged = mutation(Op::Insert, &f.insert, new_id(), 3);
+    let r = f
+        .store
+        .write(WriteOp {
+            actor: None,
+            mutations: vec![quiet, logged],
+        })
+        .await
+        .unwrap();
+    assert_eq!((r.first_seq, r.last_seq), (1, 1));
+    assert_eq!(f.store.changes_since(0, 10).await.unwrap().len(), 1);
+}
