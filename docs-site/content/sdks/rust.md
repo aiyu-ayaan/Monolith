@@ -1,8 +1,8 @@
 ---
-title: Guide
+title: Rust
 description: Async client on tokio and reqwest.
-group: Rust
-order: 14
+group: Platform guides
+order: 240
 ---
 
 ```rust
