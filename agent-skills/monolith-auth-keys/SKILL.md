@@ -33,4 +33,5 @@ Public, per app: `GET /api/v1/apps/{app}/auth/providers` tells a client what to 
   The URL must be in the app's allowed redirects (Authentication page), or start answers 400. Register `<public origin>/api/v1/apps/{app}/auth/oauth/{provider}/callback` at the provider; set `MONOLITH_PUBLIC_URL` behind a proxy.
 - 401 on login = wrong email or password (or disabled), never which. 409 on register = email taken. 403 = sign-up or the method is switched off.
 - Console (superuser): `GET|POST /users`, `PATCH|DELETE /users/{id}`.
+- SDKs hide all of this: `mono.auth.signIn(...)` plus `Monolith.init` handle refresh and provider redirects. Python and Rust only build the provider URL; you open the browser.
 - Not yet: email verification, password reset, OTP, MFA, Apple.

@@ -18,7 +18,7 @@ natively by Claude Code and is easy to copy into other agents' instruction files
 | `monolith-sync` | Offline pull/push and conflicts |
 | `monolith-rules` | Rules/filters language and pitfalls |
 | `monolith-auth-keys` | Tokens, keys, scopes |
-| `monolith-sdk-typescript`, `monolith-sdk-kotlin` | SDK usage |
+| `monolith-sdk-typescript`, `monolith-sdk-kotlin`, `monolith-sdk-dart`, `monolith-sdk-python`, `monolith-sdk-rust` | SDK usage |
 | `monolith-debug` | Ordered debugging procedure and symptom map |
 | `monolith-app-<app>` *(generated per app)* | That app's collections, fields, rules, scopes, example queries |
 

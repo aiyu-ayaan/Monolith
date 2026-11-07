@@ -39,3 +39,7 @@ curl -N -H "Authorization: Bearer $MONOLITH_KEY" \
   receive rows it allows; they get `delete` only when the view rule is public.
 - A client 256 frames behind is dropped: reconnect and refetch.
 - Debug: `GET /api/v1/apps/{app}/stats` has `realtime.{connections,events,dropped}`; the admin UI Realtime page is a live monitor.
+
+## From an SDK
+
+Prefer the SDK live queries over hand-written SSE: `collection.onSnapshot` (TypeScript, Kotlin Flow, Dart Stream, Python `on_snapshot`, Rust `on_snapshot`) gives the current result then a snapshot per change, `onDocSnapshot` follows one record, `subscribe` gives raw events. They reconnect with backoff and resume from the last `seq`. See the SDK skills.

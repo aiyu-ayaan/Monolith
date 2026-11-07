@@ -31,8 +31,11 @@ Or fetch from a running server without the CLI:
 | `monolith-rules` | Rule/filter language, classes, how to write safe rules |
 | `monolith-auth-keys` | Users, tokens, refresh, API keys and scopes |
 | `monolith-files` | Storage buckets: upload, download, listing, access and limits |
-| `monolith-sdk-typescript` | `@monolith/client` usage |
-| `monolith-sdk-kotlin` | Kotlin core + Android usage |
+| `monolith-sdk-typescript` | `@monolith/client`: init, auth, collections, onSnapshot, files |
+| `monolith-sdk-kotlin` | Kotlin core, Android and Compose |
+| `monolith-sdk-dart` | Dart and Flutter |
+| `monolith-sdk-python` | Python (`monolith-client`) |
+| `monolith-sdk-rust` | Rust (`monolith-client`) |
 | `monolith-debug` | Systematic debugging with request ids, explain endpoints, logs, MCP debug tools |
 
 Skills are generated from `api/` and `docs/api/` by `tools/agent-pack` so they never drift;
