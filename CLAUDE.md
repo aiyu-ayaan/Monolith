@@ -4,7 +4,7 @@ Monolith is a self-hosted, single-container backend suite in Rust: database with
 access rules, auth, realtime, offline sync, files, analytics, and backups. One server
 serves many apps. Inspired by PocketBase and Firebase.
 
-**Current phase: Phase 1 (core data plane) nearly done; first Phase 2 slices landed (per-app auth config, realtime v1 over SSE, backups v1, API keys v1, storage buckets v1). Phase 0 bake-off runs and the M1–M6 gates are pending (benchmarks need the owner's OK).**
+**Current phase: Phase 1 (core data plane) nearly done; first Phase 2 slices landed (per-app auth config, realtime v1 over SSE, backups v1, API keys v1, storage buckets v1, app-user auth with email/password and OAuth/OIDC, SDK `Monolith.init` + auth UI kits (TypeScript/React, Android Compose; Flutter written, untested), docs site content). Phase 0 bake-off runs and the M1–M6 gates are pending (benchmarks need the owner's OK).**
 The design docs in `development/docs/` are the source of truth. Read
 `development/docs/README.md` first, then `development/TODO.md` for where work stands.
 

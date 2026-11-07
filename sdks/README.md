@@ -26,7 +26,7 @@ Detailed breakdown of capabilities implemented across the official client SDKs:
 | | Installer link bootstrap (`install`) | [x] | [x] | [x] | [x] | [x] | [ ] |
 | | Session sign-out (`signOut()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
 | | Reactive listener (`onChange`) | [x] | [x] (Flow) | [x] (Stream) | [x] | [x] | [ ] |
-| | Secure token persistence | Web Storage | EncryptedSharedPrefs | In-memory | In-memory | In-memory | [ ] |
+| | Secure token persistence | Web Storage | EncryptedSharedPrefs | In-memory (Flutter: secure storage) | In-memory (file option) | In-memory (file option) | [ ] |
 | | Scoped API key auth | [x] | [x] | [x] | [x] | [x] | [ ] |
 | **Storage** | Object upload (`upload()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
 | | Download URL (`getURL()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
@@ -51,6 +51,24 @@ Detailed breakdown of capabilities implemented across the official client SDKs:
 | **Offline** | Local replica caching & sync | Phase 3 | Phase 3 | Phase 3 | Phase 3 | Phase 3 | Phase 5 |
 
 ---
+
+## App-user auth (end users)
+
+`Monolith.init` returns a client that restores the stored session and refreshes tokens (before expiry and once after a `401`, single flight). Design: `development/docs/24-sdk-ux-and-auth-ui.md`.
+
+| Capability | TypeScript | Kotlin / Android | Dart | Flutter | Python | Rust |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| One-line init | `Monolith.init` | `Monolith.init` | `Monolith.init` | `MonolithFlutter.init` | `monolith.init` | `Monolith::init` |
+| Sign up / sign in / out | [x] | [x] | [x] | [x] | [x] | [x] |
+| Provider list (`getProviders`) | [x] | [x] | [x] | [x] | [x] | [x] |
+| Provider sign-in | redirect, popup | Custom Tab | browser + link | browser + link | URL helper | URL helper |
+| Auto refresh, single flight | [x] | [x] | [x] | [x] | [x] | [x] |
+| Session storage | `localStorage` | encrypted prefs | memory / custom | secure storage | memory / file | memory / file |
+| Headless controller | [x] | [x] | [x] | [x] | n/a | n/a |
+| Sign-in screen | `<monolith-auth>`, React | Compose | n/a | widgets | n/a | n/a |
+| Tests run | [x] 45 (no DOM) | [x] core + JVM unit | [x] | **not run** (no Flutter) | [x] 34 | [x] |
+
+Known gaps: no render tests for the web element, React or Compose screens; the Flutter package was never compiled; email verification, password reset and MFA do not exist on the server.
 
 ## Detailed Feature Specifications
 
