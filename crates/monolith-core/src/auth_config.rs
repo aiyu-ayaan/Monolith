@@ -15,6 +15,7 @@ pub const MIN_PASSWORD_LEN: u32 = 8;
 pub const MAX_PASSWORD_LEN: u32 = 72;
 const MAX_FIELD: usize = 256;
 const MAX_SECRET: usize = 2048;
+const MAX_REDIRECTS: usize = 20;
 
 /// A sign-in provider the server knows how to configure. `fields` are provider-specific
 /// extras beyond client id and secret; `required` lists the ones that must be set to enable it.
@@ -70,7 +71,7 @@ pub const CATALOG: &[ProviderDef] = &[
     },
 ];
 
-fn def(id: &str) -> Option<&'static ProviderDef> {
+pub(crate) fn def(id: &str) -> Option<&'static ProviderDef> {
     CATALOG.iter().find(|d| d.id == id)
 }
 
@@ -108,6 +109,9 @@ pub struct StoredProvider {
 pub struct StoredAuth {
     pub email_password: EmailPassword,
     pub providers: Vec<StoredProvider>,
+    /// Where OAuth may send the browser back to (exact URL, or a prefix ending in `*`).
+    #[serde(default)]
+    pub allowed_redirects: Vec<String>,
 }
 
 /// One provider as returned by the API: no secret, only whether one is set.
@@ -129,6 +133,7 @@ pub struct ProviderView {
 pub struct AuthConfigView {
     pub email_password: EmailPassword,
     pub providers: Vec<ProviderView>,
+    pub allowed_redirects: Vec<String>,
     pub catalog: &'static [ProviderDef],
 }
 
@@ -153,9 +158,26 @@ pub struct AuthConfigIn {
     pub email_password: EmailPassword,
     #[serde(default)]
     pub providers: Vec<ProviderIn>,
+    #[serde(default)]
+    pub allowed_redirects: Vec<String>,
 }
 
 impl StoredAuth {
+    /// Provider entry usable for sign-in, with its catalog definition.
+    pub fn enabled(&self, id: &str) -> Option<&StoredProvider> {
+        self.providers.iter().find(|p| p.id == id && p.enabled)
+    }
+
+    /// Whether `uri` may receive the browser after OAuth (exact match or `prefix*`).
+    pub fn redirect_allowed(&self, uri: &str) -> bool {
+        self.allowed_redirects
+            .iter()
+            .any(|a| match a.strip_suffix('*') {
+                Some(prefix) => uri.starts_with(prefix),
+                None => a == uri,
+            })
+    }
+
     pub fn view(&self, app: &str) -> AuthConfigView {
         AuthConfigView {
             email_password: self.email_password.clone(),
@@ -174,6 +196,7 @@ impl StoredAuth {
                     })
                 })
                 .collect(),
+            allowed_redirects: self.allowed_redirects.clone(),
             catalog: CATALOG,
         }
     }
@@ -268,11 +291,17 @@ impl StoredAuth {
                 }
             }
             for (k, v) in &extra {
-                if matches!(k.as_str(), "issuer" | "baseUrl") && !v.starts_with("https://") {
+                let local = ["http://localhost", "http://127.0.0.1", "http://[::1]"]
+                    .iter()
+                    .any(|p| v.starts_with(p));
+                if matches!(k.as_str(), "issuer" | "baseUrl")
+                    && !v.starts_with("https://")
+                    && !local
+                {
                     errs.push(FieldError::new(
                         &at(&format!("extra.{k}")),
                         "invalid_format",
-                        "must be an https:// URL",
+                        "must be an https:// URL (http only for localhost)",
                     ));
                 }
             }
@@ -284,10 +313,37 @@ impl StoredAuth {
                 extra,
             });
         }
+        let mut redirects = Vec::new();
+        if input.allowed_redirects.len() > MAX_REDIRECTS {
+            errs.push(FieldError::new(
+                "allowedRedirects",
+                "out_of_range",
+                format!("at most {MAX_REDIRECTS} entries"),
+            ));
+        }
+        for (i, r) in input.allowed_redirects.iter().enumerate() {
+            let r = r.trim();
+            let scheme = r.split_once("://").map(|(s, _)| s.to_ascii_lowercase());
+            let bad = r.len() > MAX_FIELD
+                || r.chars().any(char::is_whitespace)
+                || scheme.as_deref().is_none_or(|s| {
+                    s.is_empty() || matches!(s, "javascript" | "data" | "file" | "vbscript")
+                });
+            if bad {
+                errs.push(FieldError::new(
+                    &format!("allowedRedirects[{i}]"),
+                    "invalid_format",
+                    "must look like https://app.example.com/auth or myapp://auth, optionally ending in *",
+                ));
+            } else if !redirects.iter().any(|o| o == r) {
+                redirects.push(r.to_owned());
+            }
+        }
         if errs.is_empty() {
             Ok(StoredAuth {
                 email_password: input.email_password,
                 providers: out,
+                allowed_redirects: redirects,
             })
         } else {
             Err(CoreError::Validation(errs))

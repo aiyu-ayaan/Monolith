@@ -377,6 +377,13 @@ fn caller(reg: &Registry, headers: &HeaderMap, app: &str) -> ApiResult<Caller> {
             };
             Ok(Caller { p, key: Some(k) })
         }
+        Some(t) if reg.verify_superuser(t).is_none() => {
+            // Not a superuser token: an app user's access token, bound to this app.
+            let p = reg
+                .verify_user(app, t)
+                .ok_or(ApiError(CoreError::Unauthorized))?;
+            Ok(Caller { p, key: None })
+        }
         _ => Ok(Caller {
             p: principal(reg, headers)?,
             key: None,
@@ -474,6 +481,32 @@ pub fn router(reg: Arc<Registry>) -> Router {
         .route(
             "/api/v1/apps/{app}/api-keys/{id}",
             axum::routing::delete(revoke_api_key).put(update_api_key),
+        )
+        .route("/api/v1/apps/{app}/auth/providers", get(auth_providers))
+        .route("/api/v1/apps/{app}/auth/register", post(auth_register))
+        .route("/api/v1/apps/{app}/auth/login", post(auth_login))
+        .route("/api/v1/apps/{app}/auth/refresh", post(auth_refresh))
+        .route("/api/v1/apps/{app}/auth/logout", post(auth_logout))
+        .route(
+            "/api/v1/apps/{app}/auth/me",
+            get(auth_me).patch(auth_update_me),
+        )
+        .route("/api/v1/apps/{app}/auth/password", post(auth_password))
+        .route(
+            "/api/v1/apps/{app}/auth/oauth/{provider}/start",
+            get(oauth_start),
+        )
+        .route(
+            "/api/v1/apps/{app}/auth/oauth/{provider}/callback",
+            get(oauth_callback),
+        )
+        .route(
+            "/api/v1/apps/{app}/users",
+            get(list_users).post(create_user),
+        )
+        .route(
+            "/api/v1/apps/{app}/users/{id}",
+            axum::routing::patch(update_user).delete(delete_user),
         )
         .route(
             "/api/v1/apps/{app}/webhooks",
@@ -1945,6 +1978,218 @@ async fn retry_delivery(
     require_su(&reg, &headers)?;
     reg.retry_delivery(&app, &id, &did).await?;
     Ok(StatusCode::ACCEPTED.into_response())
+}
+
+// ---------- app users (doc 08) ----------
+
+async fn auth_providers(State(reg): St, Path(app): Path<String>) -> ApiResult<Response> {
+    Ok(axum::Json(reg.public_auth(&app).await?).into_response())
+}
+
+async fn auth_register(
+    State(reg): St,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    let input: monolith_core::RegisterIn = parse_json(body)?;
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(reg.register_user(&app, input).await?),
+    )
+        .into_response())
+}
+
+async fn auth_login(
+    State(reg): St,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    let c: Credentials = parse_json(body)?;
+    Ok(axum::Json(reg.sign_in_user(&app, &c.email, &c.password).await?).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RefreshIn {
+    refresh_token: String,
+}
+
+async fn auth_refresh(
+    State(reg): St,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    let r: RefreshIn = parse_json(body)?;
+    Ok(axum::Json(reg.refresh_session(&app, &r.refresh_token).await?).into_response())
+}
+
+async fn auth_logout(
+    State(reg): St,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    let r: RefreshIn = parse_json(body)?;
+    reg.sign_out_user(&app, &r.refresh_token).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// The signed-in app user's id; superusers, keys and anonymous callers get 401.
+fn user_id(reg: &Registry, headers: &HeaderMap, app: &str) -> ApiResult<Id> {
+    let c = caller(reg, headers, app)?;
+    match (c.key, c.p.auth) {
+        (None, Some(a)) if !c.p.superuser => Ok(a.id),
+        _ => Err(ApiError(CoreError::Unauthorized)),
+    }
+}
+
+async fn auth_me(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    let id = user_id(&reg, &headers, &app)?;
+    Ok(axum::Json(reg.user_info(&app, &id).await?).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NameIn {
+    name: String,
+}
+
+async fn auth_update_me(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    let id = user_id(&reg, &headers, &app)?;
+    let n: NameIn = parse_json(body)?;
+    Ok(axum::Json(reg.update_me(&app, &id, &n.name).await?).into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PasswordIn {
+    old_password: String,
+    new_password: String,
+}
+
+async fn auth_password(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    let id = user_id(&reg, &headers, &app)?;
+    let p: PasswordIn = parse_json(body)?;
+    reg.change_password(&app, &id, &p.old_password, &p.new_password)
+        .await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// `MONOLITH_PUBLIC_URL`, else the request's own scheme and host (`X-Forwarded-Proto` behind a trusted proxy).
+fn public_origin(headers: &HeaderMap) -> String {
+    if let Ok(u) = std::env::var("MONOLITH_PUBLIC_URL") {
+        return u.trim_end_matches('/').to_owned();
+    }
+    let host = headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("localhost");
+    let proto = trust_proxy()
+        .then(|| headers.get("x-forwarded-proto")?.to_str().ok())
+        .flatten()
+        .unwrap_or("http");
+    format!("{proto}://{host}")
+}
+
+async fn oauth_start(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, provider)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Response> {
+    let redirect = q
+        .get("redirectUri")
+        .ok_or_else(|| ApiError(CoreError::BadRequest("redirectUri is required".into())))?;
+    let url = reg
+        .oauth_start(&app, &provider, redirect, &public_origin(&headers))
+        .await?;
+    Ok(axum::response::Redirect::temporary(&url).into_response())
+}
+
+async fn oauth_callback(
+    State(reg): St,
+    Path((app, provider)): Path<(String, String)>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Response> {
+    let url = reg
+        .oauth_callback(
+            &app,
+            &provider,
+            q.get("code").map(String::as_str),
+            q.get("state").map(String::as_str),
+            q.get("error").map(String::as_str),
+        )
+        .await?;
+    let mut res = axum::response::Redirect::to(&url).into_response();
+    // The fragment carries tokens: keep it out of referrers and caches.
+    res.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    res.headers_mut()
+        .insert("referrer-policy", HeaderValue::from_static("no-referrer"));
+    Ok(res)
+}
+
+async fn list_users(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let limit = q.get("limit").and_then(|l| l.parse().ok()).unwrap_or(50);
+    let (items, next) = reg
+        .list_users(&app, limit, q.get("after").map(String::as_str))
+        .await?;
+    Ok(axum::Json(json!({"items": items, "next": next})).into_response())
+}
+
+async fn create_user(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let input: monolith_core::RegisterIn = parse_json(body)?;
+    Ok((
+        StatusCode::CREATED,
+        axum::Json(reg.create_user(&app, input).await?),
+    )
+        .into_response())
+}
+
+async fn update_user(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let edit: monolith_core::UserEdit = parse_json(body)?;
+    Ok(axum::Json(reg.update_user(&app, &id, edit).await?).into_response())
+}
+
+async fn delete_user(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    reg.delete_user(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 // ---------- plugins (doc 14) ----------

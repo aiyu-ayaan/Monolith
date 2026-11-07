@@ -124,7 +124,8 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [ ] S3 follow-ups: run the suite against a real MinIO/S3 (needs the owner's OK and credentials), presigned-URL redirects, migrate blobs between
       backends, encrypt the stored secret, bucket-lifecycle docs, remote-aware backups (versioning / copy)
 - [ ] Storage follow-ups: rule-based/per-user access, file fields on records, upload/download benchmark
-- [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
+- [x] Phase 2 auth v1: users (list/create/disable/delete), password register/login/refresh/logout, user tokens, OAuth code exchange for 10 providers, public `auth/providers` (`docs/08`)
+- [ ] Auth follow-ups: email verification + password reset (needs a mail transport), OTP/magic link, MFA, anonymous users, Apple, id-token checks, failed-login rate limit, user collections with custom fields, cached claims in tokens
 - [x] Realtime v2: filtered and per-record topics, `snapshot`, `since` replay, `leave` events (`docs/07 §9`)
 - [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
       WebSocket + channels; `fields`/`expand`; per-conn `seen` beyond 50 000;

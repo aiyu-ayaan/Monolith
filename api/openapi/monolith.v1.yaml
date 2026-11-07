@@ -1503,6 +1503,301 @@ paths:
         "403": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/auth/providers:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: authProviders
+      description: |
+        Public. The sign-in methods this app offers, for building a sign-in screen: email and password
+        (with whether sign-up is open) and every enabled OAuth/OIDC provider that works. Nothing secret.
+      responses:
+        "200":
+          description: Methods
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicAuth" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/auth/register:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: authRegister
+      description: Creates an email and password account and signs it in. 403 when sign-up or the method is off, 409 when the email is taken.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string, maxLength: 254 }
+                password: { type: string, minLength: 8, maxLength: 72, description: "At least the app's minPasswordLength" }
+                name: { type: string, maxLength: 100 }
+      responses:
+        "201":
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/auth/login:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: authLogin
+      description: Signs in with email and password. Wrong email, wrong password and a disabled account all answer 401.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Signed in
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/auth/refresh:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: authRefresh
+      description: Trades a refresh token for a new access and refresh token. The old refresh token stops working at once (rotation).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "200":
+          description: New session
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Session" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/auth/logout:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: authLogout
+      description: Ends the session of a refresh token. Unknown tokens are not an error.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "204": { description: Signed out }
+
+  /api/v1/apps/{app}/auth/me:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: authMe
+      description: The signed-in app user (needs a user access token; superusers and keys get 401).
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppUser" }
+        "401": { $ref: "#/components/responses/Problem" }
+    patch:
+      operationId: authUpdateMe
+      description: Changes the display name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: { type: string, maxLength: 100 }
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppUser" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/auth/password:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: authChangePassword
+      description: Changes the password (needs the old one) and ends every session of the user.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [oldPassword, newPassword]
+              properties:
+                oldPassword: { type: string }
+                newPassword: { type: string }
+      responses:
+        "204": { description: Changed }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/auth/oauth/{provider}/start:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string, example: google }
+      - name: redirectUri
+        in: query
+        required: true
+        schema: { type: string }
+        description: Where to send the browser when done. Must match the app's `allowedRedirects`.
+    get:
+      operationId: oauthStart
+      description: |
+        Starts an OAuth sign-in (authorization code with PKCE): 302 to the provider. When the user is done,
+        the provider returns to `/auth/oauth/{provider}/callback`, which 302s to `redirectUri` with the
+        session in the URL fragment: `#token=…&refreshToken=…&expiresAt=…`, or `#error=oauth_failed&error_description=…`.
+        Register `<public origin>/api/v1/apps/{app}/auth/oauth/{provider}/callback` at the provider.
+        Set `MONOLITH_PUBLIC_URL` when the server sits behind a proxy.
+      responses:
+        "302": { description: Redirect to the provider }
+        "400": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/auth/oauth/{provider}/callback:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: provider
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: oauthCallback
+      description: The provider's return URL (not called by clients). 302 to the app's redirect with the session or an error in the fragment.
+      parameters:
+        - { name: code, in: query, schema: { type: string } }
+        - { name: state, in: query, schema: { type: string } }
+        - { name: error, in: query, schema: { type: string } }
+      responses:
+        "302": { description: Redirect back to the app }
+        "400": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/users:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: listUsers
+      description: App users, oldest first (superuser). Pass `next` as `after` for the following page.
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: after, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/AppUser" } }
+                  next: { type: [string, "null"] }
+        "401": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createUser
+      description: Creates an email and password user without signing in (superuser).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+                name: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppUser" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    patch:
+      operationId: updateUser
+      description: Changes name, disabled flag or password (superuser). Disabling or a new password ends the user's sessions.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                name: { type: string }
+                disabled: { type: boolean }
+                password: { type: string }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AppUser" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteUser
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api/v1/apps/{app}/auth/config:
     parameters:
       - $ref: "#/components/parameters/App"
@@ -1876,6 +2171,46 @@ components:
         created: { type: string, format: date-time }
         updated: { type: string, format: date-time }
 
+    AppUser:
+      type: object
+      required: [id, name, created, disabled, providers]
+      properties:
+        id: { type: string }
+        email: { type: [string, "null"] }
+        name: { type: string }
+        created: { type: string, format: date-time }
+        disabled: { type: boolean }
+        lastLogin: { type: [string, "null"], format: date-time }
+        providers: { type: array, items: { type: string }, description: "`password` and linked provider ids" }
+    Session:
+      type: object
+      required: [token, refreshToken, expiresAt, user]
+      properties:
+        token: { type: string, description: "Access token, sent as `Authorization: Bearer`; valid 15 minutes" }
+        refreshToken: { type: string, description: Valid 30 days, single use }
+        expiresAt: { type: string, format: date-time, description: When the access token expires }
+        user: { $ref: "#/components/schemas/AppUser" }
+    PublicAuth:
+      type: object
+      required: [app, emailPassword, providers]
+      properties:
+        app: { type: string }
+        emailPassword:
+          type: object
+          required: [enabled, allowSignup, minPasswordLength]
+          properties:
+            enabled: { type: boolean }
+            allowSignup: { type: boolean }
+            minPasswordLength: { type: integer }
+        providers:
+          type: array
+          items:
+            type: object
+            required: [id, name, startPath]
+            properties:
+              id: { type: string, example: google }
+              name: { type: string, example: Google }
+              startPath: { type: string, description: "Open it (relative to the server) with `?redirectUri=` to start the sign-in" }
     Plugin:
       type: object
       required: [id, name, events, enabled, created, size, fuel, calls, errors]
@@ -1976,10 +2311,11 @@ components:
 
     AuthConfig:
       type: object
-      required: [emailPassword, providers, catalog]
+      required: [emailPassword, providers, allowedRedirects, catalog]
       properties:
         emailPassword: { $ref: "#/components/schemas/EmailPasswordConfig" }
         providers: { type: array, items: { $ref: "#/components/schemas/AuthProvider" } }
+        allowedRedirects: { type: array, items: { type: string }, description: URLs OAuth may send the browser back to (exact, or a prefix ending in `*`) }
         catalog: { type: array, items: { $ref: "#/components/schemas/AuthProviderDef" } }
 
     AuthProviderInput:
@@ -1999,6 +2335,7 @@ components:
       properties:
         emailPassword: { $ref: "#/components/schemas/EmailPasswordConfig" }
         providers: { type: array, items: { $ref: "#/components/schemas/AuthProviderInput" } }
+        allowedRedirects: { type: array, maxItems: 20, items: { type: string, maxLength: 256 } }
 
     AppStats:
       type: object

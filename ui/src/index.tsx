@@ -10,6 +10,7 @@ import AppLayout, { AppHome } from "./pages/AppLayout";
 import { AppAnalytics, SystemAnalytics } from "./pages/Analytics";
 import Records from "./pages/Records";
 import Auth from "./pages/Auth";
+import Users from "./pages/Users";
 import Logs from "./pages/Logs";
 import Rules from "./pages/Rules";
 import Realtime from "./pages/Realtime";
@@ -71,6 +72,7 @@ render(
             <Route path="/" component={AppHome} />
             <Route path="/analytics" component={AppAnalytics} />
             <Route path="/auth" component={Auth} />
+            <Route path="/users" component={Users} />
             <Route path="/logs" component={Logs} />
             <Route path="/rules" component={Rules} />
             <Route path="/realtime" component={Realtime} />

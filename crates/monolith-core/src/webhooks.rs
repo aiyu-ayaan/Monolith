@@ -282,6 +282,10 @@ impl WhHub {
         Ok(hub)
     }
 
+    pub(crate) fn client(&self) -> &reqwest::Client {
+        &self.client
+    }
+
     pub(crate) fn engine(&self) -> &wasmtime::Engine {
         &self.engine
     }

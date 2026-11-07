@@ -48,6 +48,21 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS wh_deliveries_due ON webhook_deliveries (status, next_at);
 CREATE INDEX IF NOT EXISTS wh_deliveries_hook ON webhook_deliveries (hook, created);
+CREATE TABLE IF NOT EXISTS app_users (
+  id BLOB PRIMARY KEY, app TEXT NOT NULL, email TEXT, hash TEXT, name TEXT NOT NULL,
+  created INTEGER NOT NULL, disabled INTEGER NOT NULL, last_login INTEGER,
+  UNIQUE (app, email)
+) STRICT;
+CREATE TABLE IF NOT EXISTS app_identities (
+  app TEXT NOT NULL, provider TEXT NOT NULL, subject TEXT NOT NULL, user BLOB NOT NULL,
+  PRIMARY KEY (app, provider, subject)
+) STRICT;
+CREATE INDEX IF NOT EXISTS app_identities_user ON app_identities (user);
+CREATE TABLE IF NOT EXISTS app_sessions (
+  hash BLOB PRIMARY KEY, app TEXT NOT NULL, user BLOB NOT NULL, exp INTEGER NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS app_sessions_exp ON app_sessions (exp);
+CREATE INDEX IF NOT EXISTS app_sessions_user ON app_sessions (user);
 CREATE TABLE IF NOT EXISTS plugins (
   id BLOB PRIMARY KEY, app TEXT NOT NULL, name TEXT NOT NULL, wasm BLOB NOT NULL,
   events TEXT NOT NULL, enabled INTEGER NOT NULL, fuel INTEGER NOT NULL, created INTEGER NOT NULL
@@ -76,9 +91,9 @@ pub struct Registry {
     pub(crate) wh: Arc<crate::webhooks::WhHub>,
     apps: RwLock<HashMap<String, Arc<App>>>,
     pub(crate) open_lock: tokio::sync::Mutex<()>,
-    token_key: Vec<u8>,
+    pub(crate) token_key: Vec<u8>,
     /// Verified against when the email is unknown, so timing does not reveal accounts.
-    dummy_hash: String,
+    pub(crate) dummy_hash: String,
     /// One-time installer token `(token, expires µs)`, memory only (doc 18 §2).
     install: tokio::sync::Mutex<Option<(String, i64)>>,
     /// Storage of apps that used it since start.
@@ -87,6 +102,8 @@ pub struct Registry {
     pub(crate) thumb_pool: Arc<tokio::sync::Semaphore>,
     /// Live API keys by SHA-256 of the secret; verification never touches the DB (doc 08 §2).
     pub(crate) keys: RwLock<HashMap<[u8; 32], Arc<crate::apikeys::ApiKey>>>,
+    /// OAuth sign-ins in flight, by `state` (memory only, 10 minutes).
+    pub(crate) oauth_pending: std::sync::Mutex<HashMap<String, crate::oauth::Pending>>,
     /// All HTTP traffic plus every app's record ops (in memory, since start).
     pub metrics: Arc<Metrics>,
 }
@@ -208,6 +225,7 @@ impl Registry {
             )),
             sys,
             wh,
+            oauth_pending: std::sync::Mutex::new(HashMap::new()),
             apps: RwLock::new(HashMap::new()),
             open_lock: tokio::sync::Mutex::new(()),
             token_key: token_key.to_vec(),
@@ -393,6 +411,7 @@ impl Registry {
         self.drop_api_keys(name).await?;
         self.drop_webhooks(name).await?;
         self.drop_plugins(name).await?;
+        self.drop_app_users(name).await?;
         self.files
             .write()
             .unwrap_or_else(|e| e.into_inner())
@@ -409,7 +428,7 @@ impl Registry {
 
     // ---------- per-app auth configuration ----------
 
-    async fn stored_auth(&self, app: &str) -> CoreResult<StoredAuth> {
+    pub(crate) async fn stored_auth(&self, app: &str) -> CoreResult<StoredAuth> {
         let rows = self
             .sys
             .query(Query {

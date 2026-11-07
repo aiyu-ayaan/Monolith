@@ -26,7 +26,7 @@ export default function Auth() {
   const toInput = (p: AuthProvider): AuthProviderInput => ({ id: p.id, enabled: p.enabled, clientId: p.clientId, extra: p.extra });
   /** Sends the whole config; secrets of untouched providers are kept by the server. */
   const save = async (emailPassword: AuthConfig["emailPassword"], providers: AuthProviderInput[]) => {
-    mutate(await api<AuthConfig>("PUT", url(), { emailPassword, providers }));
+    mutate(await api<AuthConfig>("PUT", url(), { emailPassword, providers, allowedRedirects: c()?.allowedRedirects ?? [] }));
   };
   const others = (id?: string) => (c()?.providers ?? []).filter((p) => p.id !== id).map(toInput);
   const available = () => (c()?.catalog ?? []).filter((d) => !c()!.providers.some((p) => p.id === d.id));
@@ -55,7 +55,7 @@ export default function Auth() {
       <p class="notice">
         <Icon name="alert" size={16} />
         <span>
-          This saves your sign-in configuration. The sign-in flow itself (tokens, OAuth redirects) ships with Phase 2 auth, so end users cannot sign in yet.
+          Sign-in screens in the SDKs read this configuration: every enabled provider appears automatically. Not yet available: email verification, password reset, Apple sign-in.
         </span>
       </p>
 
@@ -152,6 +152,13 @@ export default function Auth() {
             </div>
           </section>
         )}
+      </Show>
+
+      <Show when={c()}>
+        {(c) => <Redirects value={c().allowedRedirects} onSave={async (list) => {
+          mutate(await api<AuthConfig>("PUT", url(), { emailPassword: c().emailPassword, providers: c().providers.map(toInput), allowedRedirects: list }));
+          toast("Allowed redirects saved");
+        }} />}
       </Show>
 
       <Show when={editing()}>
@@ -360,5 +367,45 @@ function ProviderDrawer(p: {
         <span class="help">Register this exact URL in the {def.name} developer console (use your public origin in production).</span>
       </div>
     </Drawer>
+  );
+}
+
+/** Where the browser may return after an OAuth sign-in (guards against open redirects). */
+function Redirects(p: { value: string[]; onSave: (list: string[]) => Promise<void> }) {
+  const [text, setText] = createSignal(p.value.join("\n"));
+  const [error, setError] = createSignal<ApiError | null>(null);
+  const [busy, setBusy] = createSignal(false);
+  const submit = async (e: SubmitEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await p.onSave(text().split(/\s+/).map((s) => s.trim()).filter(Boolean));
+    } catch (err) {
+      setError(err as ApiError);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <section class="card">
+      <form onSubmit={submit}>
+        <div class="card-head">
+          <div>
+            <h2 class="card-title">Allowed redirect URLs</h2>
+            <p class="muted small">
+              OAuth sign-in returns to one of these (one per line). Use the exact URL, or end with <code>*</code> for a prefix, e.g.{" "}
+              <code>https://app.example.com/auth</code>, <code>myapp://auth*</code>. Required for provider sign-in.
+            </p>
+          </div>
+          <button class="btn" type="submit" disabled={busy()}>Save</button>
+        </div>
+        <ErrorBox error={error()} />
+        <div class="field">
+          <label for="redirs" class="sr-only">Allowed redirect URLs</label>
+          <textarea id="redirs" class="mono" rows="4" value={text()} onInput={(e) => setText(e.currentTarget.value)} />
+        </div>
+      </form>
+    </section>
   );
 }

@@ -20,6 +20,7 @@ const GROUPS: { label: string; items: Item[] }[] = [
       { id: "db", label: "Database", icon: "database" },
       { id: "storage", label: "Storage", icon: "storage", to: "/storage" },
       { id: "auth", label: "Authentication", icon: "key", to: "/auth" },
+      { id: "users", label: "Users", icon: "users", to: "/users" },
       { id: "rules", label: "Access rules", icon: "shield", to: "/rules" },
     ],
   },

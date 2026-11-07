@@ -1917,3 +1917,169 @@ async fn storage_backend_config_endpoint() {
         .await;
     assert_eq!(ok.status, StatusCode::OK);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn app_users_register_login_refresh_and_rules_see_the_user() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"shop"})),
+        true,
+    )
+    .await;
+    // A collection only signed-in users may create into; anyone may read.
+    let r = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/shop/collections",
+            Some(
+                json!({"name":"notes","fields":[{"name":"text","type":"text"}],
+                "rules":{"list":"","view":"","create":"@request.auth.id != ''"}}),
+            ),
+            true,
+        )
+        .await;
+    assert!(r.status.is_success(), "{:?}", r.body);
+    let base = "/api/v1/apps/shop";
+
+    // The sign-in screen's config is public.
+    let r = t
+        .call(Method::GET, &format!("{base}/auth/providers"), None, false)
+        .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.body["emailPassword"]["allowSignup"], true);
+    assert_eq!(r.body["providers"], json!([]));
+
+    let r = t
+        .call(
+            Method::POST,
+            &format!("{base}/auth/register"),
+            Some(json!({"email":"ada@example.com","password":"correct horse","name":"Ada"})),
+            false,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    let (token, refresh) = (
+        r.body["token"].as_str().unwrap().to_owned(),
+        r.body["refreshToken"].as_str().unwrap().to_owned(),
+    );
+    assert_eq!(r.body["user"]["name"], "Ada");
+
+    // Anonymous is refused by the rule; the user passes it and shows up as the caller of /me.
+    let note = Some(json!({"text":"hi"}));
+    let notes = format!("{base}/collections/notes/records");
+    assert_eq!(
+        t.call(Method::POST, &notes, note.clone(), false)
+            .await
+            .status,
+        StatusCode::FORBIDDEN
+    );
+    let r = t.call_with(Method::POST, &notes, note, Some(&token)).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    let me = t
+        .call_with(Method::GET, &format!("{base}/auth/me"), None, Some(&token))
+        .await;
+    assert_eq!(me.body["email"], "ada@example.com");
+    // The token is bound to its app and is not a superuser token.
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"other"})),
+        true,
+    )
+    .await;
+    assert_eq!(
+        t.call_with(
+            Method::GET,
+            "/api/v1/apps/other/auth/me",
+            None,
+            Some(&token)
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        t.call_with(Method::GET, "/api/v1/system/me", None, Some(&token))
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    // A superuser is not an app user.
+    assert_eq!(
+        t.call(Method::GET, &format!("{base}/auth/me"), None, true)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Wrong password is 401; refresh rotates; sign-out ends the session.
+    let bad = t
+        .call(
+            Method::POST,
+            &format!("{base}/auth/login"),
+            Some(json!({"email":"ada@example.com","password":"nope nope nope"})),
+            false,
+        )
+        .await;
+    assert_eq!(bad.status, StatusCode::UNAUTHORIZED);
+    let r = t
+        .call(
+            Method::POST,
+            &format!("{base}/auth/refresh"),
+            Some(json!({"refreshToken":refresh})),
+            false,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    let again = t
+        .call(
+            Method::POST,
+            &format!("{base}/auth/refresh"),
+            Some(json!({"refreshToken":refresh})),
+            false,
+        )
+        .await;
+    assert_eq!(
+        again.status,
+        StatusCode::UNAUTHORIZED,
+        "a refresh token works once"
+    );
+    let r2 = r.body["refreshToken"].as_str().unwrap();
+    assert_eq!(
+        t.call(
+            Method::POST,
+            &format!("{base}/auth/logout"),
+            Some(json!({"refreshToken":r2})),
+            false
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT
+    );
+
+    // Console: the superuser lists users; others cannot.
+    let r = t
+        .call(Method::GET, &format!("{base}/users"), None, true)
+        .await;
+    assert_eq!(r.body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        t.call_with(Method::GET, &format!("{base}/users"), None, Some(&token))
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    // OAuth start needs a redirect and a configured provider.
+    assert_eq!(
+        t.call(
+            Method::GET,
+            &format!("{base}/auth/oauth/google/start"),
+            None,
+            false
+        )
+        .await
+        .status,
+        StatusCode::BAD_REQUEST
+    );
+}

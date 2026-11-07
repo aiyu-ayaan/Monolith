@@ -127,3 +127,22 @@ route handler ─▶ scope check (fast, bitset) ─▶ collection rule (compiled
 - Not yet: `users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp` scopes; `publishable` keys, `monolith keys` CLI,
   per-collection `records:admin`, shared cache for several nodes.
 - Gaps beyond this list (single-node cache, no rate limit for failed auth, no key rotation endpoint): `development/TODO.md` "Known limitations".
+
+## Implemented today (`users.rs`, `oauth.rs`)
+
+- Users live in system.db (`app_users`, `app_identities`, `app_sessions`), not yet as a collection with custom fields.
+- Email + password: `POST /api/v1/apps/{app}/auth/register|login|refresh|logout`, `GET|PATCH /auth/me`, `POST /auth/password`.
+  Argon2id on the blocking pool; unknown email, wrong password and disabled accounts answer the same 401 after the same work.
+- Tokens: access token `u1.<app>.<user>.<exp>.<mac>` (15 min, HMAC with the server token key, bound to the app, verified with no DB read);
+  refresh token 256-bit random, stored as SHA-256, 30 days, single use (rotation). A new password or a disabled account ends all sessions;
+  an already issued access token lives until it expires.
+- Rules see the caller as `@request.auth.id` with collection `users` (no cached claims yet). Realtime and records accept user tokens.
+- OAuth 2.0 authorization code + PKCE for google, github, microsoft, facebook, discord, gitlab, linkedin, twitch, x and generic OIDC
+  (`/auth/oauth/{provider}/start` → provider → `/callback` → app redirect with `#token=…&refreshToken=…&expiresAt=…`).
+  The redirect must match the app's `allowedRedirects`; pending sign-ins are in memory (10 min, 2 000). Public origin from
+  `MONOLITH_PUBLIC_URL` or the request. Link by verified email only; an unverified email that is taken is a 409. Apple is not implemented
+  (needs a signed client secret) and is left out of the public provider list.
+- Public `GET /auth/providers` lists what a sign-in screen can offer (email/password flags, working providers); nothing secret.
+- Console: `GET|POST /users`, `PATCH|DELETE /users/{id}` (superuser).
+- Not yet: email verification, password reset, OTP/magic link, MFA, anonymous users, id-token signature checks (the profile comes from the userinfo
+  endpoint over TLS), rate limiting of failed logins, impersonation, revocation of issued access tokens, user collections with custom fields.

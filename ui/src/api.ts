@@ -237,6 +237,8 @@ export interface AuthProvider {
 export interface AuthConfig {
   emailPassword: EmailPasswordConfig;
   providers: AuthProvider[];
+  /** Where OAuth may send the browser back to (exact URL, or a prefix ending in `*`). */
+  allowedRedirects: string[];
   catalog: AuthProviderDef[];
 }
 
@@ -351,4 +353,14 @@ export interface Plugin {
   errors: number;
   lastError: string | null;
   lastRun: string | null;
+}
+
+export interface AppUser {
+  id: string;
+  email: string | null;
+  name: string;
+  created: string;
+  disabled: boolean;
+  lastLogin: string | null;
+  providers: string[];
 }

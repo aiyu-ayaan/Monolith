@@ -141,6 +141,46 @@ pub fn verify_token(key: &[u8], token: &str, now_us: i64) -> Option<Claims> {
     Some(Claims { sub, exp_us })
 }
 
+/// Access token of an app user: `u1.<app>.<sub hex>.<exp µs>.<mac hex>`. The app name is part of
+/// the signed body, so a token never works on another app.
+pub fn sign_user_token(key: &[u8], app: &str, sub: &[u8; 16], exp_us: i64) -> String {
+    let body = format!("u1.{app}.{}.{exp_us}", hex(sub));
+    let tag = mac(key, &body).finalize().into_bytes();
+    format!("{body}.{}", hex(&tag))
+}
+
+/// Verifies signature, app and expiry; returns the user id.
+pub fn verify_user_token(key: &[u8], token: &str, app: &str, now_us: i64) -> Option<[u8; 16]> {
+    let (body, tag) = token.rsplit_once('.')?;
+    mac(key, body).verify_slice(&unhex::<32>(tag)?).ok()?;
+    let mut parts = body.split('.');
+    if parts.next()? != "u1" || parts.next()? != app {
+        return None;
+    }
+    let sub = unhex::<16>(parts.next()?)?;
+    let exp_us: i64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() || exp_us <= now_us {
+        return None;
+    }
+    Some(sub)
+}
+
+/// Unpadded base64url (PKCE challenges, opaque tokens).
+pub fn base64url(b: &[u8]) -> String {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let n = c
+            .iter()
+            .enumerate()
+            .fold(0u32, |n, (i, x)| n | u32::from(*x) << (16 - 8 * i));
+        for i in 0..=c.len() {
+            out.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +217,26 @@ mod tests {
         let forged = t.replace(".1000.", ".9999.");
         assert_eq!(verify_token(&key, &forged, 0), None, "edited claims");
         assert_eq!(verify_token(&key, "garbage", 0), None);
+    }
+
+    #[test]
+    fn user_token_is_app_bound() {
+        let key = [3u8; 32];
+        let t = sign_user_token(&key, "shop", &[5; 16], 1_000);
+        assert_eq!(verify_user_token(&key, &t, "shop", 999), Some([5; 16]));
+        assert_eq!(verify_user_token(&key, &t, "other", 999), None);
+        assert_eq!(verify_user_token(&key, &t, "shop", 1_000), None);
+        assert_eq!(verify_token(&key, &t, 999), None, "not a superuser token");
+    }
+
+    #[test]
+    fn base64url_matches_rfc7636_example() {
+        // RFC 7636 appendix B: S256 challenge of the sample verifier.
+        let v = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        assert_eq!(
+            base64url(&sha256(v.as_bytes())),
+            "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        );
+        assert_eq!(base64url(b"ab"), "YWI");
     }
 }
