@@ -3,8 +3,8 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -34,7 +34,7 @@ pub struct SqliteConfig {
     pub change_bus: usize,
     /// Bounded wait when the reader queue is full or a reader hits a lock (doc 03 §10, doc 06 §8).
     pub read_timeout: Duration,
-    /// Idle period before the writer runs a passive WAL checkpoint.
+    /// Idle period before the writer runs `PRAGMA optimize` and requests a checkpoint.
     pub idle_checkpoint: Duration,
 }
 
@@ -91,6 +91,9 @@ const INSERT_CHANGE: &str = "INSERT INTO _changes (seq, ts, coll, rid, op, hlc, 
 const SELECT_CHANGES: &str = "SELECT seq, ts, coll, rid, op, hlc, actor, fields FROM _changes WHERE seq > ?1 ORDER BY seq LIMIT ?2";
 
 const STMT_CACHE: usize = 256;
+
+/// A busy writer asks for a background checkpoint at most this often.
+const CHECKPOINT_GAP: Duration = Duration::from_millis(100);
 
 enum WriterMsg {
     Write {
@@ -222,6 +225,11 @@ impl SqliteStore {
             bus: bus.clone(),
             max_batch: cfg.max_batch,
             idle_checkpoint: cfg.idle_checkpoint,
+            ckpt: Arc::new(Checkpoint {
+                path: path.to_owned(),
+                pending: AtomicBool::new(false),
+            }),
+            last_ckpt: Instant::now(),
             next_seq: last_seq as u64 + 1,
             hlc: last_hlc as u64,
         };
@@ -338,6 +346,43 @@ fn reader_loop(conn: Connection, rx: Receiver<ReadJob>) {
     }
 }
 
+/// One store's checkpoint request; `pending` keeps at most one in the queue.
+struct Checkpoint {
+    path: PathBuf,
+    pending: AtomicBool,
+}
+
+/// Background WAL checkpoints (doc 04 §5) on one thread shared by every store. A checkpoint
+/// fsyncs the WAL and the database file; on the writer thread that stalled every queued write
+/// (~1 s seen under load). PASSIVE never blocks the writer or readers. The writer keeps its
+/// own `wal_autocheckpoint` as the backstop that lets the WAL restart under nonstop writes;
+/// by then the background pass has copied most frames. A short-lived connection per pass
+/// costs well under the fsync and keeps idle apps from holding one more connection.
+fn request_checkpoint(c: &Arc<Checkpoint>) {
+    static WORKER: OnceLock<Option<Sender<Arc<Checkpoint>>>> = OnceLock::new();
+    let worker = WORKER.get_or_init(|| {
+        let (tx, rx) = bounded::<Arc<Checkpoint>>(1024);
+        spawn("monolith-ckpt", move || {
+            while let Ok(c) = rx.recv() {
+                c.pending.store(false, Relaxed);
+                // No CREATE flag: an app deleted meanwhile must not come back as an empty file.
+                let flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+                if let Ok(conn) = Connection::open_with_flags(&c.path, flags) {
+                    let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE);");
+                }
+            }
+        })
+        .ok()
+        .map(|()| tx)
+    });
+    if let Some(tx) = worker
+        && !c.pending.swap(true, Relaxed)
+        && tx.try_send(c.clone()).is_err()
+    {
+        c.pending.store(false, Relaxed);
+    }
+}
+
 fn run_query(conn: &Connection, q: &Query) -> Result<Vec<Row>> {
     let mut stmt = conn.prepare_cached(&q.sql)?;
     let cols = stmt.column_count();
@@ -418,6 +463,8 @@ struct Writer {
     bus: broadcast::Sender<ChangeBatch>,
     max_batch: usize,
     idle_checkpoint: Duration,
+    ckpt: Arc<Checkpoint>,
+    last_ckpt: Instant,
     next_seq: u64,
     hlc: u64,
 }
@@ -433,9 +480,8 @@ impl Writer {
                 match rx.recv_timeout(self.idle_checkpoint) {
                     Ok(m) => m,
                     Err(RecvTimeoutError::Timeout) => {
-                        let _ = self
-                            .conn
-                            .execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;");
+                        let _ = self.conn.execute_batch("PRAGMA optimize;");
+                        request_checkpoint(&self.ckpt);
                         dirty = false;
                         continue;
                     }
@@ -565,6 +611,10 @@ impl Writer {
         s.max_batch.fetch_max(n_ops, Relaxed);
         s.commit_us.fetch_add(us, Relaxed);
         s.commit_us_max.fetch_max(us, Relaxed);
+        if self.last_ckpt.elapsed() >= CHECKPOINT_GAP {
+            self.last_ckpt = Instant::now();
+            request_checkpoint(&self.ckpt);
+        }
         replies.drain(..).for_each(Reply::send);
         if !changes.is_empty() {
             // No receivers is fine: consumers can always read the persisted log.
