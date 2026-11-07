@@ -1,0 +1,24 @@
+name: monolith_flutter
+description: Monolith for Flutter. Two-line start, secure session storage, a drop-in sign-in screen and headless auth widgets.
+version: 0.1.0
+homepage: https://github.com/monolith-backend/monolith
+publish_to: none
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  monolith_client:
+    path: ../dart
+  flutter_secure_storage: ^9.2.2
+  url_launcher: ^6.3.0
+  app_links: ^6.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  http: ^1.2.0
