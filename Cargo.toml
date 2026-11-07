@@ -7,6 +7,7 @@ members = [
     "crates/monolith-core",
     "crates/monolith-server",
     "bench/harness",
+    "sdks/rust",
 ]
 
 [workspace.package]
