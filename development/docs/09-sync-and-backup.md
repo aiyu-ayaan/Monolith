@@ -176,5 +176,10 @@ then protect that data.
   `<data>/backups/<app>/b<UTC timestamp>.db`; plain SQLite files, not yet `tar.zst`.
 - `GET|POST /api/v1/apps/{app}/backups`, `GET|DELETE .../backups/{name}` (download streams in 256 KiB chunks),
   `POST .../backups:restore {backup, newApp}` restores into a **new** app. Admin UI: Backups page.
+- **Storage buckets are included** when the app has any: `b<ts>.files/` next to the `.db` holds a `files.db` snapshot and
+  hard links to the content-addressed blobs (immutable, so a link is a free, consistent copy; a copy is made only across
+  file systems). Metadata commits pause while the links are made; uploads do not. Restore into a new app copies
+  `files.db` and links the blobs back, so the restored app is independent of the backup. Deleting a backup removes both.
+  The download endpoint serves the database file only.
 - Not yet: schedules and retention (B2), zstd, S3 targets, WAL shipping, encryption (B4), in-place restore (B3),
-  `logs.db`/files in the archive, the `monolith backup` CLI. Backups are kept when the app is deleted.
+  `logs.db` in the archive, one-file archive that includes the storage, the `monolith backup` CLI. Backups are kept when the app is deleted.

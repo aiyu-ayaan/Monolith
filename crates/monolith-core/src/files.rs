@@ -350,6 +350,35 @@ fn write_op(mutations: Vec<Mutation>) -> WriteOp {
     }
 }
 
+/// Hard link, or a copy when the two paths are on different file systems.
+pub(crate) fn link_or_copy(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    match std::fs::hard_link(from, to) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(_) => std::fs::copy(from, to).map(drop),
+    }
+}
+
+/// Recreates `src/blobs/**` under `dst` with [`link_or_copy`].
+pub(crate) fn link_tree(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    for shard in std::fs::read_dir(src.join("blobs"))? {
+        let shard = shard?;
+        for blob in std::fs::read_dir(shard.path())? {
+            let blob = blob?;
+            link_or_copy(
+                &blob.path(),
+                &dst.join("blobs")
+                    .join(shard.file_name())
+                    .join(blob.file_name()),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// `blobs/ab/abcdef…`
 fn blob_rel(hash: &str) -> PathBuf {
     PathBuf::from("blobs").join(&hash[..2]).join(hash)
@@ -959,6 +988,45 @@ impl Files {
             items[limit - 1].key.clone()
         });
         Ok(ObjectPage { items, next_cursor })
+    }
+
+    /// Writes a consistent copy of the storage into `dest` (`files.db` plus `blobs/`). Blobs are
+    /// immutable and never rewritten, so they are hard-linked (copied when linking is not possible):
+    /// no bytes are duplicated. Metadata commits wait for the copy, uploads in flight do not.
+    pub(crate) async fn snapshot_into(&self, dest: PathBuf) -> CoreResult<()> {
+        let _g = self.commit.lock().await;
+        let d = dest.clone();
+        tokio::task::spawn_blocking(move || std::fs::create_dir_all(d))
+            .await
+            .map_err(join)?
+            .map_err(io)?;
+        self.store.snapshot(dest.join("files.db")).await?;
+        let rows = self
+            .store
+            .query(Query {
+                sql: "SELECT hash FROM blobs WHERE refs > 0".into(),
+                params: vec![],
+            })
+            .await?;
+        let hashes: Vec<String> = rows
+            .iter()
+            .map(|r| text(&r[0]))
+            .filter(|h| valid_hash(h))
+            .collect();
+        let src = self.dir.clone();
+        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            for h in hashes {
+                let rel = blob_rel(&h);
+                // A referenced blob without a file was already lost; the copy has the same hole.
+                if src.join(&rel).exists() {
+                    link_or_copy(&src.join(&rel), &dest.join(&rel))?;
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(join)?
+        .map_err(io)
     }
 
     /// Deletes blob files no row references (left by a crash between placing a file and

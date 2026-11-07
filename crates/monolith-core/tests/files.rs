@@ -393,3 +393,71 @@ async fn legacy_layout_is_migrated_on_open() {
     f.delete_object("old", "b").await.unwrap();
     assert_eq!(blobs(dir.path()), 0);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn backups_carry_storage_and_restore_it() {
+    let (dir, reg, f) = setup().await;
+    // An app that never used storage gets a plain database backup.
+    reg.create_app("plain").await.unwrap();
+    assert!(!reg.create_backup("plain").await.unwrap().files);
+
+    f.put_bucket(
+        bucket_with(serde_json::json!({"name":"b","public":true,"maxBytes":100})),
+        true,
+    )
+    .await
+    .unwrap();
+    put(&f, "b", "x/one", "text/plain", b"first").await.unwrap();
+    put(&f, "b", "two", "text/plain", b"first").await.unwrap(); // same content
+    put(&f, "b", "three", "text/plain", b"second")
+        .await
+        .unwrap();
+    let b = reg.create_backup("s").await.unwrap();
+    assert!(b.files);
+    assert!(reg.list_backups("s").await.unwrap()[0].files);
+    let stem = &b.name[..18];
+    let bdir = dir.path().join("backups/s").join(format!("{stem}.files"));
+    assert!(bdir.join("files.db").exists());
+    let blob_files = |p: &Path| -> usize {
+        std::fs::read_dir(p.join("blobs"))
+            .unwrap()
+            .flatten()
+            .map(|d| std::fs::read_dir(d.path()).unwrap().count())
+            .sum()
+    };
+    assert_eq!(
+        blob_files(&bdir),
+        2,
+        "deduplicated blobs, linked not copied"
+    );
+
+    // The live app moves on: the backup keeps the old state.
+    f.delete_object("b", "three").await.unwrap();
+    f.delete_bucket("b", true).await.unwrap();
+    assert_eq!(blobs(dir.path()), 0);
+    assert_eq!(
+        blob_files(&bdir),
+        2,
+        "hard links survive deleting the originals"
+    );
+
+    reg.restore_backup("s", &b.name, "copy").await.unwrap();
+    let c = reg.files("copy").await.unwrap();
+    let bi = c.bucket_info("b").await.unwrap();
+    assert_eq!(
+        (bi.objects, bi.bytes, bi.max_bytes, bi.public),
+        (3, 16, Some(100), true)
+    );
+    assert_eq!(read(c.open_object("b", "x/one").await.unwrap().1), b"first");
+    assert_eq!(
+        read(c.open_object("b", "three").await.unwrap().1),
+        b"second"
+    );
+    // The restored app is independent: deleting there does not touch the backup.
+    c.delete_object("b", "two").await.unwrap();
+    c.delete_object("b", "x/one").await.unwrap();
+    assert_eq!(blob_files(&bdir), 2);
+
+    reg.delete_backup("s", &b.name).await.unwrap();
+    assert!(!bdir.exists());
+}

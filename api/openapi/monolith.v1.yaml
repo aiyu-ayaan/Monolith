@@ -806,7 +806,7 @@ paths:
         schema: { type: string, pattern: "^b[0-9]{17}\\.db$" }
     get:
       operationId: downloadBackup
-      description: Streams the snapshot, a plain SQLite database file.
+      description: Streams the snapshot, a plain SQLite database file. Storage files are not part of this download; they stay on the server in `b<ts>.files/`.
       responses:
         "200":
           description: SQLite file
@@ -1415,8 +1415,9 @@ components:
       required: [name, bytes, created]
       properties:
         name: { type: string, example: b20261107134512123.db }
-        bytes: { type: integer }
+        bytes: { type: integer, description: Size of the database file (storage is not included) }
         created: { type: string, format: date-time }
+        files: { type: boolean, description: "The backup also holds the app's storage buckets: a files.db snapshot plus hard links to the blobs, in b<ts>.files/ next to the database file" }
 
     BucketInput:
       type: object

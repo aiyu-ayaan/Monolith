@@ -80,6 +80,7 @@ Firebase-Storage style buckets, not yet the record-field files of §2–§5.
   row, no `seq`, no bus event, so `files.db` and `system.db` do not grow a change log.
 - Data written by the first storage layout (`<bucket>/<id>` files, no counters) is migrated when the app's storage opens.
 - **Deviations from §2–§4:** local disk only; no thumbnails yet; no `_files` table (records have no file fields yet).
+- Backups include storage (`docs/09`): `files.db` snapshot plus hard links to the blobs.
 - Not yet: S3 backend and presigned URLs, per-user/rule-based access (needs end-user auth), file fields on records,
-  per-app total quota, files in backups, benchmarks (upload/download throughput and memory are unmeasured).
+  per-app total quota, benchmarks (upload/download throughput and memory are unmeasured).
 - More gaps: `development/TODO.md` "Known limitations".

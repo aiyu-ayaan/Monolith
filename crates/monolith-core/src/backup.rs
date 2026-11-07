@@ -1,6 +1,10 @@
 //! Per-app snapshot backups (doc 09 part B, "Snapshot"): `VACUUM INTO` a consistent copy under
 //! `<data>/backups/<app>/b<UTC timestamp>.db`. The writer keeps running while it is taken.
 //!
+//! Storage buckets ride along: when the app has files, `b<ts>.files/` holds a `files.db` snapshot and
+//! hard links to the (immutable) blobs, so a backup costs no extra bytes on the same disk. The
+//! download endpoint serves the database file only.
+//!
 //! v1: manual create, list, download, delete, and restore into a NEW app. Not yet: schedules,
 //! retention, zstd, S3, WAL shipping, encryption, in-place restore. Backups outlive the app
 //! on purpose: delete the files to discard them.
@@ -24,6 +28,8 @@ pub struct BackupInfo {
     pub bytes: u64,
     /// RFC 3339, taken from the name.
     pub created: String,
+    /// The backup also holds the app's storage buckets (`<name stem>.files/`).
+    pub files: bool,
 }
 
 /// `b` + 17 digits (`YYYYMMDDhhmmssmmm`) + `.db`; the only names that reach the filesystem.
@@ -46,6 +52,11 @@ fn created_of(name: &str) -> String {
         &d[12..14],
         &d[14..17]
     )
+}
+
+/// `b20261107134512123.files` next to `b20261107134512123.db`.
+fn files_dir(dir: &std::path::Path, name: &str) -> PathBuf {
+    dir.join(format!("{}.files", &name[..18]))
 }
 
 fn io(e: std::io::Error) -> CoreError {
@@ -82,10 +93,32 @@ impl Registry {
             .collect();
         let name = format!("b{}.db", &digits[..17]);
         let info = a.store().snapshot(dir.join(&name)).await?;
+        // Storage that was never used has no directory; do not create one just to copy nothing.
+        let probe = self.app_dir(app).join("files").join("files.db");
+        let has_files = tokio::task::spawn_blocking(move || probe.exists())
+            .await
+            .map_err(|e| CoreError::Internal(e.to_string()))?;
+        if has_files {
+            let dest = files_dir(&dir, &name);
+            let res = self.files(app).await?.snapshot_into(dest.clone()).await;
+            if let Err(e) = res {
+                // A backup without its files would look complete; remove both halves.
+                let _ = tokio::task::spawn_blocking({
+                    let (db, d) = (dir.join(&name), dest);
+                    move || {
+                        let _ = std::fs::remove_file(db);
+                        std::fs::remove_dir_all(d)
+                    }
+                })
+                .await;
+                return Err(e);
+            }
+        }
         Ok(BackupInfo {
             created: created_of(&name),
             name,
             bytes: info.bytes,
+            files: has_files,
         })
     }
 
@@ -97,13 +130,14 @@ impl Registry {
         let dir = self.backup_dir(app);
         let mut out = tokio::task::spawn_blocking(move || -> std::io::Result<Vec<BackupInfo>> {
             let mut v = Vec::new();
-            for e in std::fs::read_dir(dir)? {
+            for e in std::fs::read_dir(&dir)? {
                 let e = e?;
                 let name = e.file_name().to_string_lossy().into_owned();
                 if valid_backup(&name) {
                     v.push(BackupInfo {
                         created: created_of(&name),
                         bytes: e.metadata()?.len(),
+                        files: files_dir(&dir, &name).is_dir(),
                         name,
                     });
                 }
@@ -126,10 +160,17 @@ impl Registry {
 
     pub async fn delete_backup(&self, app: &str, name: &str) -> CoreResult<()> {
         let p = self.backup_path(app, name)?;
-        tokio::task::spawn_blocking(move || std::fs::remove_file(p))
-            .await
-            .map_err(|e| CoreError::Internal(e.to_string()))?
-            .map_err(io)
+        let fdir = files_dir(&self.backup_dir(app), name);
+        tokio::task::spawn_blocking(move || {
+            std::fs::remove_file(p)?;
+            match std::fs::remove_dir_all(fdir) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            }
+        })
+        .await
+        .map_err(|e| CoreError::Internal(e.to_string()))?
+        .map_err(io)
     }
 
     /// Opens a backup for streaming: `(file, byte length)`.
@@ -160,11 +201,21 @@ impl Registry {
             )));
         }
         let dest_dir = self.app_dir(new_app);
+        let src_files = files_dir(&self.backup_dir(app), name);
         // Reserve the name first so two restores cannot race onto one directory.
         let info = self.reserve_app(new_app).await?;
         let copy = tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(&dest_dir)?;
-            std::fs::copy(&src, dest_dir.join("data.db")).map(drop)
+            std::fs::copy(&src, dest_dir.join("data.db"))?;
+            if src_files.is_dir() {
+                let out = dest_dir.join("files");
+                std::fs::create_dir_all(out.join(".tmp"))?;
+                std::fs::copy(src_files.join("files.db"), out.join("files.db"))?;
+                if src_files.join("blobs").is_dir() {
+                    crate::files::link_tree(&src_files, &out)?;
+                }
+            }
+            Ok(())
         })
         .await
         .map_err(|e| CoreError::Internal(e.to_string()))?;

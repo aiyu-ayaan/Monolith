@@ -286,4 +286,5 @@ export interface Backup {
   name: string;
   bytes: number;
   created: string;
+  files?: boolean;
 }

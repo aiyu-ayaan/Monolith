@@ -113,13 +113,14 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Storage internals: BLAKE3 content addressing + dedupe, reference counts, bucket quota, usage counters, orphan GC,
       MIME sniffing, migration of the first layout (`docs/13 §6`)
 - [ ] Key/storage hardening (from the known limitations): per-app quota, conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
-- [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, thumbnails, files in backups, upload/download benchmark
+- [x] Files in backups (hard-linked blobs + `files.db` snapshot, restored into the new app)
+- [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, thumbnails, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
       `since` replay from `_changes`; WebSocket + channels; filtered and per-record topics; `fields`/`expand`; `leave` events;
       relational view rules via the batched SQL check (`docs/07 §5`); benchmark S7; micro-benchmarks for the hub (`CLAUDE.md`: realtime needs them)
-- [ ] Backups follow-ups: schedule + retention (`docs/09` B2), zstd archive, S3 target, WAL shipping, in-place restore, files in the archive,
-      `monolith backup` CLI, encryption (B4), streamed download without buffering in the admin UI
+- [ ] Backups follow-ups: schedule + retention (`docs/09` B2), zstd archive, S3 target, WAL shipping, in-place restore,
+      `monolith backup` CLI, encryption (B4), a single-file archive that includes the storage, streamed download without buffering in the admin UI
 - [ ] Sidebar items still marked "Soon": Offline sync (`docs/09` part A),
       Webhooks and Plugins (`docs/14`; webhooks need an HTTP client, plugins a WASM runtime)
 - [ ] Rules follow-ups: `:length` and `:each` modifiers, `~` with a field on the right side, `@request.query.*`, `@request.key.*`
@@ -159,7 +160,8 @@ API keys
 - Auth failures are not rate limited, so a flood of bad keys costs one SHA-256 each and nothing else.
 
 Storage
-- Local disk only; not in backups (restore creates an app without its files). No per-user access, thumbnails or S3.
+- Local disk only. Backups include storage as hard links on the same disk (not a disaster-recovery copy; the download endpoint serves the
+  database file only). No per-user access, thumbnails or S3.
 - Dedupe is per app (never across apps), and only by whole-file hash: no chunk-level dedupe.
 - The reference counts can drift if the database is edited by hand or restored from a copy; `gc` fixes orphan files but does not
   recompute counts. Upload/download are not benchmarked.

@@ -82,7 +82,7 @@ export default function Backups() {
       <p class="notice">
         <Icon name="alert" size={16} />
         <span>
-          Manual snapshots only. Schedules, retention, S3 targets, encryption and in-place restore are planned. Restore creates a new app, so nothing is overwritten.
+          Manual snapshots only. Storage buckets are included (as links, on the same disk); download gives the database file only. Schedules, retention, S3 targets, encryption and in-place restore are planned. Restore creates a new app, so nothing is overwritten.
         </span>
       </p>
       <div class="table-wrap">
@@ -99,7 +99,7 @@ export default function Backups() {
             <For each={ready(list)?.items ?? []} fallback={<tr><td colspan="4" class="empty-row">{list.loading ? "Loading…" : "No backups yet."}</td></tr>}>
               {(b) => (
                 <tr>
-                  <td class="mono small">{b.name}</td>
+                  <td class="mono small">{b.name}{b.files ? " + files" : ""}</td>
                   <td class="small">{fmtDate(b.created)}</td>
                   <td class="num">{fmtBytes(b.bytes)}</td>
                   <td class="num nowrap">
@@ -139,7 +139,7 @@ export default function Backups() {
           >
             <ErrorBox error={error()} />
             <p class="muted small">
-              Creates a new app with the data and schema of <span class="mono">{b().name}</span> ({fmtBytes(b().bytes)}). <span class="mono">{params.app}</span> is not changed.
+              Creates a new app with the data and schema of <span class="mono">{b().name}</span> ({fmtBytes(b().bytes)}){b().files ? " and its storage buckets" : ""}. <span class="mono">{params.app}</span> is not changed.
             </p>
             <div class="field">
               <label for="newapp">New app name</label>
