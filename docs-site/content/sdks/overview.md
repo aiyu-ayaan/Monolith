@@ -47,6 +47,22 @@ let mono = Monolith::init("https://api.example.com", "shop")?;
 | Sign-in screen | `<monolith-auth>`, React | Compose | Flutter widgets | none | none |
 | Realtime | `onSnapshot` | `onSnapshot` Flow | `onSnapshot` Stream | `on_snapshot` | `on_snapshot` |
 
+## Common tasks
+
+| Task | TypeScript | Kotlin | Dart | Python | Rust |
+|---|---|---|---|---|---|
+| Collection handle | `mono.collection("t")` | `mono.collection<T>("t")` | `mono.collection<T>("t")` | `mono.collection("t")` | `mono.records("t")` |
+| Read many | `list({...})` | `list(ListOptions(...))` | `list(filter: ...)` | `list(filter=...)` | `list(Some(&opts))` |
+| Read one | `getOne(id)` | `getOne(id)` | `getOne(id)` | `get_one(id)` | `get_one(id)` |
+| Create | `create(data)` | `create(data)` | `create(map)` | `create(data)` | `create(&body)` |
+| Update (partial) | `update(id, data)` | `update(id, data)` | `update(id, map)` | `update(id, data)` | `update(id, &body)` |
+| Delete | `delete(id)` | `delete(id)` | `delete(id)` | `delete(id)` | `delete(id)` |
+| Live query | `onSnapshot(cb)` | `onSnapshot()` Flow | `onSnapshot()` Stream | `on_snapshot(cb)` | `on_snapshot(opts)` |
+| Upload file | `files.upload(b, k, data)` | `files.upload(b, k, bytes)` | `files.upload(b, k, data)` | `files.upload(b, k, data)` | `files().upload(b, k, data, ct)` |
+| Sign in | `auth.signIn({email, password})` | `auth.signIn(email, password)` | `auth().signIn(email, password)` | `auth().sign_in(email, password)` | `auth().sign_in(email, password)` |
+
+Full signatures are in the API reference for each SDK.
+
 ## Limits and status
 
 :::status partial
@@ -55,5 +71,6 @@ No SDK is published to a package registry yet; use the repository. The TypeScrip
 
 ## Next steps
 
-- [TypeScript](/sdks/typescript), [Kotlin](/sdks/kotlin), [Dart and Flutter](/sdks/dart-flutter), [Python](/sdks/python), [Rust](/sdks/rust)
+- API reference: [TypeScript](/sdks/reference/typescript), [Kotlin](/sdks/reference/kotlin), [Dart and Flutter](/sdks/reference/dart-flutter), [Python](/sdks/reference/python), [Rust](/sdks/reference/rust)
+- Guides: [TypeScript](/sdks/typescript), [Kotlin](/sdks/kotlin), [Dart and Flutter](/sdks/dart-flutter), [Python](/sdks/python), [Rust](/sdks/rust)
 - [Authentication overview](/build/auth/overview)
