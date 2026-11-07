@@ -15,9 +15,9 @@ use axum::routing::{get, post};
 use monolith_core::app::now_us;
 use monolith_core::codec::format_us;
 use monolith_core::{
-    AppInfo, Auth, BatchItem, BatchKind, CollectionDef, CoreError, ExplainQueryReq, ExplainRuleReq,
-    ListParams, Principal, ReadOpts, RecordOut, Registry, ReqKind, RequestLog, TotalMode, Value,
-    WriteOpts,
+    ApiKey, ApiKeyIn, AppInfo, Auth, BatchItem, BatchKind, CollectionDef, CoreError,
+    ExplainQueryReq, ExplainRuleReq, ListParams, Principal, ReadOpts, RecordOut, Registry, ReqKind,
+    RequestLog, TotalMode, Value, WriteOpts,
 };
 use monolith_store::id::{decode as decode_id, encode_string, new_id};
 use serde::Deserialize;
@@ -235,19 +235,88 @@ async fn request_id(State(reg): St, req: Request, next: Next) -> Response {
     res
 }
 
-/// Bearer token → superuser; no header → anonymous; a bad token is a 401, never a downgrade.
-fn principal(reg: &Registry, headers: &HeaderMap) -> ApiResult<Principal> {
+fn bearer(headers: &HeaderMap) -> ApiResult<Option<&str>> {
     let Some(v) = headers.get(header::AUTHORIZATION) else {
-        return Ok(Principal::default());
+        return Ok(None);
     };
-    let token = v
-        .to_str()
+    v.to_str()
         .ok()
         .and_then(|s| s.strip_prefix("Bearer "))
-        .ok_or(ApiError(CoreError::Unauthorized))?;
-    reg.verify_superuser(token.trim())
+        .map(|t| Some(t.trim()))
+        .ok_or(ApiError(CoreError::Unauthorized))
+}
+
+/// Bearer token → superuser; no header → anonymous; a bad token is a 401, never a downgrade.
+/// API keys (`mk_...`) are app-bound, so routes outside an app reject them.
+fn principal(reg: &Registry, headers: &HeaderMap) -> ApiResult<Principal> {
+    let Some(token) = bearer(headers)? else {
+        return Ok(Principal::default());
+    };
+    if token.starts_with("mk_") {
+        return Err(ApiError(CoreError::Unauthorized));
+    }
+    reg.verify_superuser(token)
         .map(|_| Principal::superuser())
         .ok_or(ApiError(CoreError::Unauthorized))
+}
+
+/// Who calls an app route. A key is checked against its app and scopes with [`Caller::need`].
+struct Caller {
+    p: Principal,
+    key: Option<Arc<ApiKey>>,
+}
+
+impl Caller {
+    /// Fails with 403 unless the credential may do `perm` (e.g. `records:read`) on `target`.
+    /// Superusers and anonymous callers pass: rules decide for anonymous ones.
+    fn need(&self, perm: &str, target: Option<&str>) -> ApiResult<()> {
+        match &self.key {
+            Some(k) if !k.allows(perm, target) => Err(ApiError(CoreError::Forbidden(
+                "the API key lacks the scope for this operation",
+            ))),
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Resolves the credential for a route of `app`. A key with `records:admin` bypasses collection
+/// rules; any other key is anonymous to the rules (no `@request.key` yet).
+fn caller(reg: &Registry, headers: &HeaderMap, app: &str) -> ApiResult<Caller> {
+    match bearer(headers)? {
+        Some(t) if t.starts_with("mk_") => {
+            let k = reg
+                .verify_api_key(t)
+                .ok_or(ApiError(CoreError::Unauthorized))?;
+            if k.app != app {
+                return Err(ApiError(CoreError::Forbidden(
+                    "the API key belongs to another app",
+                )));
+            }
+            let p = if k.admin() {
+                Principal::superuser()
+            } else {
+                Principal::default()
+            };
+            Ok(Caller { p, key: Some(k) })
+        }
+        _ => Ok(Caller {
+            p: principal(reg, headers)?,
+            key: None,
+        }),
+    }
+}
+
+/// [`caller`] plus one scope check; the common case for a single-collection route.
+fn app_principal(
+    reg: &Registry,
+    headers: &HeaderMap,
+    app: &str,
+    perm: &str,
+    target: &str,
+) -> ApiResult<Principal> {
+    let c = caller(reg, headers, app)?;
+    c.need(perm, Some(target))?;
+    Ok(c.p)
 }
 
 fn require_su(reg: &Registry, headers: &HeaderMap) -> ApiResult<()> {
@@ -311,6 +380,14 @@ pub fn router(reg: Arc<Registry>) -> Router {
         .route(
             "/api/v1/apps/{app}/auth/config",
             get(get_auth_config).put(put_auth_config),
+        )
+        .route(
+            "/api/v1/apps/{app}/api-keys",
+            get(list_api_keys).post(create_api_key),
+        )
+        .route(
+            "/api/v1/apps/{app}/api-keys/{id}",
+            axum::routing::delete(revoke_api_key),
         )
         .route("/api/v1/system/stats", get(system_stats))
         .route(
@@ -568,7 +645,7 @@ async fn list_records(
     Path((app, coll)): Path<(String, String)>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let p = app_principal(&reg, &headers, &app, "records:read", &coll)?;
     let limit = match q.get("limit") {
         None => None,
         Some(l) => Some(
@@ -595,7 +672,7 @@ async fn count_records(
     Path((app, coll)): Path<(String, String)>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let p = app_principal(&reg, &headers, &app, "records:read", &coll)?;
     let mode = match parse_total(&q, TotalMode::Exact)? {
         TotalMode::None => TotalMode::Exact,
         m => m,
@@ -616,7 +693,7 @@ async fn create_record(
     Query(q): Query<HashMap<String, String>>,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let p = app_principal(&reg, &headers, &app, "records:write", &coll)?;
     let opts = WriteOpts {
         dry_run: parse_dry_run(&q)?,
         if_match: None,
@@ -637,7 +714,7 @@ async fn view_record(
     Path((app, coll, id)): Path<(String, String, String)>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let p = app_principal(&reg, &headers, &app, "records:read", &coll)?;
     let opts = ReadOpts {
         fields: q.get("fields").cloned(),
         expand: q.get("expand").cloned(),
@@ -658,7 +735,7 @@ async fn update_record(
     Query(q): Query<HashMap<String, String>>,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let p = app_principal(&reg, &headers, &app, "records:write", &coll)?;
     let opts = WriteOpts {
         dry_run: parse_dry_run(&q)?,
         if_match: parse_if_match(&headers)?,
@@ -680,7 +757,7 @@ async fn upsert_record(
     Query(q): Query<HashMap<String, String>>,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let p = app_principal(&reg, &headers, &app, "records:write", &coll)?;
     let opts = WriteOpts {
         dry_run: parse_dry_run(&q)?,
         if_match: parse_if_match(&headers)?,
@@ -706,7 +783,7 @@ async fn delete_record(
     Path((app, coll, id)): Path<(String, String, String)>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let p = app_principal(&reg, &headers, &app, "records:write", &coll)?;
     let opts = WriteOpts {
         dry_run: parse_dry_run(&q)?,
         if_match: parse_if_match(&headers)?,
@@ -744,7 +821,7 @@ async fn batch(
     Query(q): Query<HashMap<String, String>>,
     body: Result<Bytes, BytesRejection>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let c = caller(&reg, &headers, &app)?;
     let dry_run = parse_dry_run(&q)?;
     let raw = body_bytes(body)?;
     let b: BatchBody<'_> = serde_json::from_slice(&raw)
@@ -772,7 +849,14 @@ async fn batch(
             })
         })
         .collect::<ApiResult<Vec<_>>>()?;
-    let ids = reg.app(&app).await?.batch_with(&p, &items, dry_run).await?;
+    for it in &items {
+        c.need("records:write", Some(it.collection))?;
+    }
+    let ids = reg
+        .app(&app)
+        .await?
+        .batch_with(&c.p, &items, dry_run)
+        .await?;
     let results: Vec<_> = ids
         .iter()
         .map(|id| json!({"id": encode_string(id)}))
@@ -1002,7 +1086,8 @@ async fn realtime(
     Path(app): Path<String>,
     Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Response> {
-    let p = principal(&reg, &headers)?;
+    let c = caller(&reg, &headers, &app)?;
+    c.need("realtime:subscribe", None)?;
     let names: Vec<String> = q
         .get("collections")
         .map(|s| {
@@ -1013,7 +1098,10 @@ async fn realtime(
                 .collect()
         })
         .unwrap_or_default();
-    let sub = reg.app(&app).await?.subscribe(&p, &names)?;
+    for n in &names {
+        c.need("records:read", Some(n))?;
+    }
+    let sub = reg.app(&app).await?.subscribe(&c.p, &names)?;
     let mut hb = tokio::time::interval(std::time::Duration::from_secs(
         monolith_core::realtime::HEARTBEAT_S,
     ));
@@ -1154,6 +1242,43 @@ async fn put_auth_config(
     require_su(&reg, &headers)?;
     let input = parse_json(body)?;
     Ok(axum::Json(reg.put_auth_config(&app, input).await?).into_response())
+}
+
+// ---------- API keys (doc 08 §4) ----------
+
+async fn list_api_keys(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(json!({"items": reg.list_api_keys(&app).await?})).into_response())
+}
+
+/// The response carries the secret as `key`; it is never shown again.
+async fn create_api_key(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let input: ApiKeyIn = parse_json(body)?;
+    let (info, secret) = reg.create_api_key(&app, input).await?;
+    let mut out =
+        serde_json::to_value(info).map_err(|e| ApiError(CoreError::Internal(e.to_string())))?;
+    out["key"] = json!(secret);
+    Ok((StatusCode::CREATED, axum::Json(out)).into_response())
+}
+
+async fn revoke_api_key(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, id)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    reg.revoke_api_key(&app, &id).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 // ---------- admin UI (doc 15 §4) ----------

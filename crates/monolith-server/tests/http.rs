@@ -78,9 +78,20 @@ impl T {
     }
 
     async fn call(&self, method: Method, uri: &str, body: Option<Value>, su: bool) -> Res {
+        let token = su.then(|| self.token.clone());
+        self.call_with(method, uri, body, token.as_deref()).await
+    }
+
+    async fn call_with(
+        &self,
+        method: Method,
+        uri: &str,
+        body: Option<Value>,
+        bearer: Option<&str>,
+    ) -> Res {
         let mut b = Request::builder().method(method).uri(uri);
-        if su {
-            b = b.header("authorization", format!("Bearer {}", self.token));
+        if let Some(t) = bearer {
+            b = b.header("authorization", format!("Bearer {t}"));
         }
         let body = match body {
             Some(v) => {
@@ -1024,4 +1035,129 @@ async fn backups_create_list_download_restore_delete() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn api_keys_scopes_and_revocation() {
+    let t = T::new().await;
+    for app in ["demo", "other"] {
+        t.call(
+            Method::POST,
+            "/api/v1/system/apps",
+            Some(json!({"name": app})),
+            true,
+        )
+        .await;
+    }
+    t.call(
+        Method::POST,
+        "/api/v1/apps/demo/collections",
+        Some(json!({"name":"tasks","fields":[{"name":"title","type":"text"}],"rules":{}})),
+        true,
+    )
+    .await;
+    let keys = "/api/v1/apps/demo/api-keys";
+    let rec = "/api/v1/apps/demo/collections/tasks/records";
+
+    // Management is superuser-only; bad scopes are rejected.
+    let new = |scopes: Value| Some(json!({"name":"ci","scopes":scopes}));
+    assert_eq!(
+        t.call(Method::POST, keys, new(json!(["records:admin"])), false)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let bad = t.call(Method::POST, keys, new(json!(["root"])), true).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{:?}", bad.body);
+
+    let admin = t
+        .call(Method::POST, keys, new(json!(["records:admin"])), true)
+        .await;
+    assert_eq!(admin.status, StatusCode::CREATED, "{:?}", admin.body);
+    let secret = admin.body["key"].as_str().unwrap().to_owned();
+    assert!(secret.starts_with("mk_demo_"));
+    let listed = t.call(Method::GET, keys, None, true).await;
+    assert_eq!(listed.body["items"][0]["prefix"], &secret[..12]);
+    assert!(
+        !listed.body.to_string().contains(&secret),
+        "secret is shown once"
+    );
+
+    // An admin key bypasses rules (the collection has no rules, so anonymous is denied).
+    let anon = t.call(Method::GET, rec, None, false).await;
+    assert_eq!(anon.status, StatusCode::FORBIDDEN);
+    let w = t
+        .call_with(Method::POST, rec, Some(json!({"title":"x"})), Some(&secret))
+        .await;
+    assert_eq!(w.status, StatusCode::CREATED, "{:?}", w.body);
+    // ...but only inside its own app, and not on admin routes.
+    let cross = t
+        .call_with(
+            Method::GET,
+            "/api/v1/apps/other/collections/tasks/records",
+            None,
+            Some(&secret),
+        )
+        .await;
+    assert_eq!(cross.status, StatusCode::FORBIDDEN);
+    let adm = t
+        .call_with(Method::GET, "/api/v1/system/apps", None, Some(&secret))
+        .await;
+    assert_eq!(adm.status, StatusCode::UNAUTHORIZED);
+    let adm = t.call_with(Method::GET, keys, None, Some(&secret)).await;
+    assert_eq!(adm.status, StatusCode::UNAUTHORIZED);
+
+    // A scoped key is limited to its scope.
+    let ro = t
+        .call(Method::POST, keys, new(json!(["records:read:tasks"])), true)
+        .await;
+    let ro_secret = ro.body["key"].as_str().unwrap().to_owned();
+    let r = t.call_with(Method::GET, rec, None, Some(&ro_secret)).await;
+    assert_ne!(r.status, StatusCode::UNAUTHORIZED);
+    let r = t
+        .call_with(
+            Method::POST,
+            rec,
+            Some(json!({"title":"y"})),
+            Some(&ro_secret),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "{:?}", r.body);
+    assert!(r.body["detail"].as_str().unwrap().contains("scope"));
+    let r = t
+        .call_with(
+            Method::GET,
+            "/api/v1/apps/demo/realtime?collections=tasks",
+            None,
+            Some(&ro_secret),
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN, "needs realtime:subscribe");
+
+    // Revoking takes effect on the next request; garbage keys are 401.
+    let id = admin.body["id"].as_str().unwrap();
+    assert_eq!(
+        t.call(Method::DELETE, &format!("{keys}/{id}"), None, true)
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+    let gone = t.call_with(Method::GET, rec, None, Some(&secret)).await;
+    assert_eq!(gone.status, StatusCode::UNAUTHORIZED);
+    let fake = t
+        .call_with(Method::GET, rec, None, Some("mk_demo_nope"))
+        .await;
+    assert_eq!(fake.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        t.call(Method::DELETE, &format!("{keys}/{id}"), None, true)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+
+    // Deleting the app removes its keys.
+    t.call(Method::DELETE, "/api/v1/system/apps/demo", None, true)
+        .await;
+    let r = t.call_with(Method::GET, rec, None, Some(&ro_secret)).await;
+    assert_eq!(r.status, StatusCode::UNAUTHORIZED);
 }

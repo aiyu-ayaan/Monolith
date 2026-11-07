@@ -850,6 +850,76 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "409": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/api-keys:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: listApiKeys
+      description: API keys of the app, newest first (superuser). Secrets are never returned.
+      responses:
+        "200":
+          description: Keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ApiKey" } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createApiKey
+      description: |
+        Creates a key. The secret is returned once, as `key`. Send it as `Authorization: Bearer mk_...`.
+        A key works only on its own app. `records:admin` bypasses collection rules; every other
+        key is anonymous to the rules, narrowed by its scopes (`@request.key.*` is not available yet).
+        Scopes: `records:read[:collection]`, `records:write[:collection]`, `records:admin`,
+        `realtime:subscribe` (also needs `records:read` per collection), `files:read[:bucket]`,
+        `files:write[:bucket]`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, scopes]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                scopes: { type: array, minItems: 1, maxItems: 32, items: { type: string } }
+                expiresInDays: { type: integer, minimum: 1, maximum: 3650, description: Omit for no expiry }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/ApiKey"
+                  - type: object
+                    required: [key]
+                    properties:
+                      key: { type: string, description: The secret, shown once }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/api-keys/{id}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: revokeApiKey
+      description: Revokes the key; it stops working on the next request.
+      responses:
+        "204": { description: Revoked }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
   /api/v1/apps/{app}/auth/config:
     parameters:
       - $ref: "#/components/parameters/App"
@@ -894,7 +964,9 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
-      description: Superuser token from /api/v1/system/auth/login. User tokens and API keys arrive in Phase 2.
+      description: |
+        Superuser token from /api/v1/system/auth/login, or an app-bound API key (`mk_...`, see
+        `/api/v1/apps/{app}/api-keys`) on that app's record and realtime routes. User tokens arrive in Phase 2.
 
   parameters:
     App:
@@ -1133,6 +1205,18 @@ components:
         name: { type: string, example: b20261107134512123.db }
         bytes: { type: integer }
         created: { type: string, format: date-time }
+
+    ApiKey:
+      type: object
+      required: [id, app, name, prefix, scopes, created]
+      properties:
+        id: { type: string }
+        app: { type: string }
+        name: { type: string }
+        prefix: { type: string, description: First 12 characters of the secret, to recognise it }
+        scopes: { type: array, items: { type: string } }
+        created: { type: string, format: date-time }
+        expires: { type: [string, "null"], format: date-time }
 
     EmailPasswordConfig:
       type: object
