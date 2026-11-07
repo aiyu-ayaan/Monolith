@@ -37,9 +37,9 @@ Detailed breakdown of capabilities implemented across the official client SDKs:
 | | Per-collection subscription (`subscribe()`) | [x] | [x] | [x] | Planned | Planned | [ ] |
 | | Reconnection with exponential backoff & jitter | [x] | [x] | [x] | Planned | Planned | [ ] |
 | | Automatic connection lifecycle (ref-counted) | [x] | [x] | [x] | Planned | Planned | [ ] |
-| | Filtered / per-record subscription (`filter`, `ids`) | [x] | Planned | Planned | Planned | Planned | [ ] |
-| | Snapshot listener (`onSnapshot`, `onDocSnapshot`) | [x] | Planned | Planned | Planned | Planned | [ ] |
-| | Gap-free resume after reconnect (`since`) and `leave` events | [x] | Planned | Planned | Planned | Planned | [ ] |
+| | Filtered / per-record subscription (`filter`, `ids`) | [x] | Planned | [x] | Planned | Planned | [ ] |
+| | Snapshot listener (`onSnapshot`, `onDocSnapshot`) | [x] | Planned | [x] (Stream) | Planned | Planned | [ ] |
+| | Gap-free resume after reconnect (`since`) and `leave` events | [x] | Planned | [x] | Planned | Planned | [ ] |
 | **Analytics** | Event tracking (`track()`) | [x] | [x] | [x] | [x] | Planned | [ ] |
 | | In-memory queue buffering | [x] | [x] | [x] | [x] | Planned | [ ] |
 | | Periodic interval flush | [x] | [x] | [x] | [x] | Planned | [ ] |

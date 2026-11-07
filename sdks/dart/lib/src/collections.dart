@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'http.dart';
 import 'realtime.dart';
 
@@ -146,6 +148,24 @@ class Collection<T> {
       decoder: _decoder,
     );
   }
+
+  /// Firestore-style query listener: emits the current result set, then a new
+  /// snapshot after every change. Reconnects re-snapshot. Server errors arrive as stream errors.
+  Stream<QuerySnapshot<T>> onSnapshot([SnapshotOptions? options]) {
+    final rt = _realtime;
+    if (rt == null) {
+      throw StateError(
+        'Realtime service is not available on this client instance.',
+      );
+    }
+    return rt.onSnapshot<T>(name, options: options, decoder: _decoder);
+  }
+
+  /// Listens to one record: emits it, or `null` once deleted or no longer visible.
+  Stream<T?> onDocSnapshot(String id) => onSnapshot(SnapshotOptions(
+        filter: "id = '${id.replaceAll("'", '')}'",
+        limit: 1,
+      )).map((s) => s.docs.isEmpty ? null : s.docs.first);
 
   T _decode(Map<String, dynamic> json) {
     final decoder = _decoder;

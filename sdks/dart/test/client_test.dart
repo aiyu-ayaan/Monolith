@@ -492,54 +492,266 @@ void main() {
       expect(results[0].body['id'], equals('1'));
       expect(results[1].status, equals(204));
     });
+  });
 
-    test('handles realtime SSE subscriptions and event dispatching', () async {
-      final streamController = StreamController<List<int>>();
+  group('realtime', () {
+    late List<Uri> urls;
+    late List<StreamController<List<int>>> conns;
+    late MonolithClient client;
 
-      final mockClient = MockClient.streaming((request, bodyStream) async {
-        expect(request.url.path, equals('/api/v1/apps/testapp/realtime'));
-        expect(request.url.queryParameters['collections'], equals('todos'));
+    setUp(() {
+      urls = [];
+      conns = [];
+      final mock = MockClient.streaming((request, bodyStream) async {
         expect(request.headers['accept'], equals('text/event-stream'));
-
+        urls.add(request.url);
+        final c = StreamController<List<int>>();
+        conns.add(c);
         return http.StreamedResponse(
-          streamController.stream,
+          c.stream,
           200,
           headers: {'content-type': 'text/event-stream'},
         );
       });
-
-      final client = createClient(ClientOptions(
+      client = createClient(ClientOptions(
         url: 'https://api.example.com',
         app: 'testapp',
-        clientFactory: () => mockClient,
+        clientFactory: () => mock,
       ));
+    });
 
+    tearDown(() => client.close());
+
+    Future<void> tick([int ms = 50]) =>
+        Future<void>.delayed(Duration(milliseconds: ms));
+
+    void send(int i, String s) => conns[i].add(utf8.encode(s));
+
+    String rec(int seq, String op, Map<String, dynamic> record,
+            [String coll = 'tasks']) =>
+        'id: $seq\nevent: record\n'
+        'data: ${jsonEncode({
+              'op': op,
+              'collection': coll,
+              'seq': seq,
+              'record': record
+            })}\n\n';
+
+    String snap(int seq, List<Map<String, dynamic>> items) =>
+        'event: snapshot\n'
+        'data: ${jsonEncode({
+              'collection': 'tasks',
+              'seq': seq,
+              'items': items,
+              'next': null
+            })}\n\n';
+
+    test('maps op to action, keeps seq, sends filter/ids as dedicated topics',
+        () async {
       final events = <RealtimeEvent<RecordModel>>[];
-      final unsub = client.collection<RecordModel>('todos').subscribe((ev) {
-        events.add(ev);
-      });
+      final off = client.collection<RecordModel>('tasks').subscribe(
+            events.add,
+            const RealtimeSubscriptionOptions(
+              filter: 'done = false',
+              ids: ['a', 'b'],
+            ),
+          );
+      await tick();
+      expect(urls, hasLength(1));
+      final q = urls.first.queryParameters;
+      expect(urls.first.path, equals('/api/v1/apps/testapp/realtime'));
+      expect(q['collections'], equals('tasks'));
+      expect(q['filter.tasks'], equals('done = false'));
+      expect(q['ids.tasks'], equals('a,b'));
 
-      // Allow connect to initiate
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-
-      // Emit SSE events including comment/ping
-      streamController.add(utf8.encode(':ping\n\n'));
-      streamController.add(utf8.encode(
-        'event: create\n'
-        'data: {"collection":"todos","action":"create","record":{"id":"rec_1","title":"RT Item","_v":1}}\n\n',
-      ));
-
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-
+      send(0, ':ping\n\n${rec(5, 'leave', {'id': 'a'})}');
+      await tick();
       expect(events, hasLength(1));
-      expect(events.first.action, equals('create'));
-      expect(events.first.collection, equals('todos'));
-      expect(events.first.record.id, equals('rec_1'));
-      expect(events.first.record['title'], equals('RT Item'));
+      expect(events.first.action, equals('leave'));
+      expect(events.first.seq, equals(5));
+      expect(events.first.collection, equals('tasks'));
+      expect(events.first.record.id, equals('a'));
+      off();
+    });
 
-      unsub();
-      client.close();
-      await streamController.close();
+    test('plain subscriptions share one connection', () async {
+      final a = <RealtimeEvent<RecordModel>>[];
+      final b = <RealtimeEvent<RecordModel>>[];
+      final offA = client.collection<RecordModel>('tasks').subscribe(a.add);
+      await tick();
+      final offB = client.collection<RecordModel>('notes').subscribe(b.add);
+      await tick();
+      // Adding a collection reopens the shared stream with both topics.
+      expect(urls.last.queryParameters['collections'], equals('tasks,notes'));
+
+      send(conns.length - 1, rec(1, 'create', {'id': 'n1'}, 'notes'));
+      await tick();
+      expect(a, isEmpty);
+      expect(b.single.action, equals('create'));
+      expect(b.single.record['id'], equals('n1'));
+      offA();
+      offB();
+    });
+
+    test('resumes a plain subscription with since; resync resets it', () async {
+      final off = client.collection<RecordModel>('tasks').subscribe((_) {});
+      await tick();
+      send(0, rec(9, 'create', {'id': 'z'}));
+      await tick();
+      expect(urls[0].queryParameters.containsKey('since'), isFalse);
+
+      // Stream ends: SDK reconnects after backoff with since=9.
+      await conns[0].close();
+      await tick(900);
+      expect(urls, hasLength(2));
+      expect(urls[1].queryParameters['since'], equals('9'));
+
+      // resync: reconnect at once without since.
+      send(1, 'event: resync\ndata: {"reason":"since"}\n\n');
+      await tick();
+      expect(urls, hasLength(3));
+      expect(urls[2].queryParameters.containsKey('since'), isFalse);
+      off();
+    });
+
+    test('onSnapshot merges snapshot, updates, leave and delete', () async {
+      final snaps = <QuerySnapshot<RecordModel>>[];
+      final sub = client
+          .collection<RecordModel>('tasks')
+          .onSnapshot(
+              const SnapshotOptions(filter: 'n >= 0', sort: 'n', limit: 5))
+          .listen(snaps.add);
+      await tick();
+      final q = urls.first.queryParameters;
+      expect(q['snapshot'], equals('5'));
+      expect(q['sort.tasks'], equals('n'));
+      expect(q['filter.tasks'], equals('n >= 0'));
+      expect(q['collections'], equals('tasks'));
+
+      send(
+        0,
+        snap(3, [
+              {'id': 'a', 'n': 2},
+              {'id': 'b', 'n': 1},
+            ]) +
+            rec(4, 'create', {'id': 'c', 'n': 0}) +
+            rec(5, 'leave', {'id': 'a'}) +
+            rec(6, 'delete', {'id': 'b'}),
+      );
+      await tick();
+      expect(
+        snaps.map((s) => s.docs.map((d) => d.id).toList()).toList(),
+        equals([
+          ['b', 'a'],
+          ['c', 'b', 'a'],
+          ['c', 'b'],
+          ['c'],
+        ]),
+      );
+      expect(snaps[0].changes.map((c) => c.type),
+          everyElement(DocumentChangeType.added));
+      expect(snaps[1].changes.single.type, equals(DocumentChangeType.added));
+      expect(snaps[1].changes.single.doc.id, equals('c'));
+      expect(snaps[2].changes.single.type, equals(DocumentChangeType.removed));
+      await sub.cancel();
+    });
+
+    test('onSnapshot sorts by multiple keys and descending', () async {
+      final snaps = <QuerySnapshot<RecordModel>>[];
+      final sub = client
+          .collection<RecordModel>('tasks')
+          .onSnapshot(const SnapshotOptions(sort: '-n,title'))
+          .listen(snaps.add);
+      await tick();
+      send(
+        0,
+        snap(1, [
+          {'id': 'a', 'n': 1, 'title': 'z'},
+          {'id': 'b', 'n': 2, 'title': 'y'},
+          {'id': 'c', 'n': 1, 'title': 'b'},
+        ]),
+      );
+      await tick();
+      expect(snaps.single.docs.map((d) => d.id), equals(['b', 'c', 'a']));
+      await sub.cancel();
+    });
+
+    test('onSnapshot re-snapshots on reconnect without since', () async {
+      final snaps = <QuerySnapshot<RecordModel>>[];
+      final sub = client
+          .collection<RecordModel>('tasks')
+          .onSnapshot()
+          .listen(snaps.add);
+      await tick();
+      expect(urls.first.queryParameters['snapshot'], equals('100'));
+      send(
+          0,
+          snap(3, [
+            {'id': 'a'},
+            {'id': 'b'}
+          ]));
+      await tick();
+      await conns[0].close();
+      await tick(900);
+      expect(urls, hasLength(2));
+      expect(urls[1].queryParameters.containsKey('since'), isFalse);
+      expect(urls[1].queryParameters['snapshot'], equals('100'));
+
+      send(
+          1,
+          snap(8, [
+            {'id': 'b', 'x': 1},
+            {'id': 'c'}
+          ]));
+      await tick();
+      final changes = {
+        for (final c in snaps.last.changes) c.doc.id: c.type,
+      };
+      expect(changes, {
+        'b': DocumentChangeType.modified,
+        'c': DocumentChangeType.added,
+        'a': DocumentChangeType.removed,
+      });
+      expect(snaps.last.docs.map((d) => d.id).toSet(), equals({'b', 'c'}));
+      await sub.cancel();
+    });
+
+    test('onSnapshot surfaces server error events as stream errors', () async {
+      final errors = <Object>[];
+      final sub = client
+          .collection<RecordModel>('tasks')
+          .onSnapshot()
+          .listen((_) {}, onError: errors.add);
+      await tick();
+      send(0, 'event: error\ndata: {"message":"bad filter"}\n\n');
+      await tick();
+      expect(errors.single, isA<RealtimeException>());
+      expect(errors.single.toString(), contains('bad filter'));
+      await sub.cancel();
+    });
+
+    test('onDocSnapshot listens to one record and yields null once gone',
+        () async {
+      final docs = <RecordModel?>[];
+      final sub = client
+          .collection<RecordModel>('tasks')
+          .onDocSnapshot("it's")
+          .listen(docs.add);
+      await tick();
+      final q = urls.first.queryParameters;
+      expect(q['filter.tasks'], equals("id = 'its'"));
+      expect(q['snapshot'], equals('1'));
+
+      send(
+          0,
+          snap(1, [
+                {'id': 'its', 'title': 'one'}
+              ]) +
+              rec(2, 'update', {'id': 'its', 'title': 'two'}) +
+              rec(3, 'leave', {'id': 'its'}));
+      await tick();
+      expect(docs.map((d) => d?['title']), equals(['one', 'two', null]));
+      await sub.cancel();
     });
   });
 }
