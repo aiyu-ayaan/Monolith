@@ -105,14 +105,20 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Admin UI dashboards: landing = server tiles + per-app cards + traffic charts; project overview = tiles, collections, sign-in status, charts
 - [x] Realtime v1 (SSE, whole-collection topics, per-audience encode, bounded queues, shutdown close); see `docs/07 §9`
 - [x] Backups v1 (manual snapshot, list, download, delete, restore into a new app); see `docs/09` "Implemented today"
-- [x] Admin UI: Logs, Access rules, Realtime monitor and Backups pages (sidebar items that stay 'Soon': Storage, API keys, Offline sync, Webhooks, Plugins)
+- [x] Admin UI: Logs, Access rules, Realtime monitor and Backups pages (sidebar items that stay 'Soon': Offline sync, Webhooks, Plugins)
+- [x] API keys v1: per-app, hashed, scoped, in-memory verification; Admin UI page (`docs/08 §7`)
+- [x] Storage buckets v1: private/public buckets, streamed upload, Range/ETag download, listing; Admin UI page (`docs/13 §6`)
+- [ ] API keys follow-ups: `@request.key.*` in rules, IP allowlist, per-key rate limit, publishable keys, last-used,
+      remaining scopes (`users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp`), `monolith keys` CLI
+- [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, blake3
+      content addressing + dedupe, MIME sniffing, thumbnails, quotas, orphan GC, files in backups, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
       `since` replay from `_changes`; WebSocket + channels; filtered and per-record topics; `fields`/`expand`; `leave` events;
       relational view rules via the batched SQL check (`docs/07 §5`); benchmark S7; micro-benchmarks for the hub (`CLAUDE.md`: realtime needs them)
 - [ ] Backups follow-ups: schedule + retention (`docs/09` B2), zstd archive, S3 target, WAL shipping, in-place restore, files in the archive,
       `monolith backup` CLI, encryption (B4), streamed download without buffering in the admin UI
-- [ ] Sidebar items still marked "Soon": Storage (files, `docs/13`), API keys (`docs/08`), Offline sync (`docs/09` part A),
+- [ ] Sidebar items still marked "Soon": Offline sync (`docs/09` part A),
       Webhooks and Plugins (`docs/14`; webhooks need an HTTP client, plugins a WASM runtime)
 - [ ] Rules follow-ups: `:length` and `:each` modifiers, `~` with a field on the right side, `@request.query.*`, `@request.key.*`
 - [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md,
@@ -138,6 +144,16 @@ Realtime (SSE)
 Backups
 - Manual only, plain SQLite files, same disk as the data (not a disaster-recovery copy until S3 or an off-volume target exists).
 - Restore creates a new app; there is no in-place restore. Backups survive deleting the app. Admin UI download buffers the file in the browser.
+
+API keys
+- Only `records:admin` bypasses rules; other keys are anonymous to the rules and narrowed by scope (no `@request.key.*` yet).
+- No IP allowlist, rate limit, publishable keys or last-used time. A lost secret cannot be shown again (only SHA-256 is stored).
+
+Storage
+- Local disk only; not in backups (restore creates an app without its files). No per-user access, thumbnails, quotas or S3.
+- Not content-addressed: overwriting writes a new blob, so identical uploads are not deduplicated. MIME is as declared by the uploader.
+- Bucket usage counts scan the object index (fine for the admin UI, not for huge buckets). Upload/download are not benchmarked.
+- Admin UI download buffers the object in the browser.
 
 Rules engine
 - Known gaps in `api/conformance/vectors/rules.json` (`:length`, `:each`, field-valued `~`).

@@ -11,3 +11,11 @@ description: Authenticate against Monolith: user sign-in, access/refresh tokens,
 - Scopes look like `records:read:tasks`, `realtime:subscribe`, `analytics:ingest`, `schema:write`, `backup:run`, `mcp`.
 - 401 = bad/expired credential. 403 = valid credential, missing scope or rule denies. Check `WWW-Authenticate` and the problem `detail`.
 - Create keys: `monolith keys create --app <app> --name <n> --scopes <list> --expires 90d`.
+
+## Implemented today
+
+- Create: `POST /api/v1/apps/{app}/api-keys` `{"name","scopes":[...],"expiresInDays"}` with a superuser token. The secret is in the `key` field, once.
+- A key works only on its own app (403 elsewhere) and never on admin routes (401). `DELETE .../api-keys/{id}` revokes at once.
+- Working scopes: `records:read|write[:collection]`, `records:admin`, `realtime:subscribe`, `files:read|write[:bucket]`.
+- Only `records:admin` bypasses collection rules (server-side only). Every other key is anonymous to the rules and just narrowed by scope: if a read returns 403 or empty, the rule needs `@request.auth` that a key cannot have; use `records:admin` server-side.
+- Realtime with a key needs `realtime:subscribe` plus `records:read` for each collection.

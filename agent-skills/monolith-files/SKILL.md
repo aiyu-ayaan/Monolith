@@ -1,0 +1,17 @@
+---
+name: monolith-files
+description: Store and serve files with Monolith storage buckets: create buckets, upload with PUT, download with Range/ETag, list by prefix, choose public vs private, and fix 401/403/413 errors. Use when handling uploads, images, attachments or /buckets routes.
+---
+
+# Storage buckets
+
+Base: `/api/v1/apps/{app}/buckets`. Keys may contain `/` (`photos/2026/a.png`); no empty, `.` or `..` segments.
+
+- Create a bucket (superuser): `POST /buckets {"name","public","maxSize","allowedMime":["image/*"]}`. `DELETE /buckets/{b}?force=true` also deletes its objects.
+- Upload: `PUT /buckets/{b}/objects/{key}` with the **raw body** (not multipart) and `Content-Type`. Needs a superuser token or a key with `files:write[:bucket]`. Replaces an existing key.
+- Download: `GET /buckets/{b}/objects/{key}`. Supports `ETag`/`If-None-Match` and one `Range`. Private bucket: superuser or key with `files:read[:bucket]`. Public bucket: no credential needed.
+- List: `GET /buckets/{b}/objects?prefix=&limit=&cursor=` (always needs `files:read`, even for public buckets); pass `nextCursor` as `cursor`.
+
+Errors: 401 no/invalid credential or anonymous on a private bucket; 403 key lacks scope or belongs to another app; 400 bad key or MIME not in `allowedMime`; 413 over `maxSize` (default 100 MiB); 409 bucket exists or not empty.
+
+Notes: only images (not SVG), audio, video, PDF and text/plain display inline, the rest download. Keys cannot create buckets. Files are not in backups and the content type is whatever the uploader declared.

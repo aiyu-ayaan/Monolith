@@ -47,3 +47,23 @@ Implemented with the `object_store` crate (async, multipart, streaming) behind a
   per `(hash,size)`.
 - Generated once, stored next to the blob, served like any file afterwards.
 - Optional: generate common sizes eagerly at upload, in the background.
+
+## 6. Implemented today (Phase 2 slice: storage buckets, `crates/monolith-core/src/files.rs`)
+
+Firebase-Storage style buckets, not yet the record-field files of §2–§5.
+
+- Layout: `<data>/apps/<app>/files/files.db` (bucket config + one row per object: key, blob id, size, MIME,
+  SHA-256 etag) and `files/<bucket>/<blob id>` for the bytes. Bucket config is cached in memory.
+- Endpoints (`api/openapi`): bucket CRUD (superuser), `GET .../objects?prefix&limit&cursor` (keyset),
+  `PUT|GET|HEAD|DELETE .../objects/{key}`. Upload is the raw body (no multipart), streamed through a bounded
+  channel to a blocking writer that hashes, enforces the bucket `maxSize` as bytes arrive, fsyncs and renames
+  into place; the metadata commit is serialized so an overwrite never orphans a blob.
+- Access: private bucket needs a superuser token or a key with `files:read[:bucket]`; public buckets are readable
+  by key without credentials but never listable; writes need `files:write[:bucket]`. Keys cannot manage buckets.
+- Download: `ETag` + `If-None-Match`, single `Range`, `nosniff`, `Content-Security-Policy: sandbox`; only images
+  (not SVG), audio, video, PDF and plain text are `inline`, everything else is `attachment`.
+- **Deviations from §2–§4:** one blob per object version (no blake3 content addressing or dedupe, so no
+  incremental-backup benefit yet); declared `Content-Type` only (no sniffing); local disk only.
+- Not yet: S3 backend and presigned URLs, per-user/rule-based access (needs end-user auth), file fields on
+  records, `_files` table, orphan GC beyond temp cleanup at open, thumbnails, quotas, delimiter listing,
+  files in backups, benchmarks (upload/download throughput and memory are unmeasured).

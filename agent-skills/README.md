@@ -28,6 +28,7 @@ Or fetch from a running server without the CLI:
 | `monolith-sync` | Offline-first pull/push, conflicts, bootstrap |
 | `monolith-rules` | Rule/filter language, classes, how to write safe rules |
 | `monolith-auth-keys` | Users, tokens, refresh, API keys and scopes |
+| `monolith-files` | Storage buckets: upload, download, listing, access and limits |
 | `monolith-sdk-typescript` | `@monolith/client` usage |
 | `monolith-sdk-kotlin` | Kotlin core + Android usage |
 | `monolith-debug` | Systematic debugging with request ids, explain endpoints, logs, MCP debug tools |

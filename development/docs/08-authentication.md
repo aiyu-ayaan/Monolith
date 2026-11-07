@@ -103,3 +103,18 @@ route handler ─▶ scope check (fast, bitset) ─▶ collection rule (compiled
   per-key limits configurable.
 - Exponential lockout on repeated failed passwords per account and per IP.
 - Captcha hook point (Turnstile/hCaptcha) for sign-up endpoints, optional.
+
+## 7. Implemented today (Phase 2 slice: API keys, `crates/monolith-core/src/apikeys.rs`)
+
+- `POST|GET /api/v1/apps/{app}/api-keys`, `DELETE .../api-keys/{id}` (superuser). The secret
+  `mk_<first 4 chars of app>_<52 base32 chars>` is returned once; `system.db/api_keys` keeps its SHA-256,
+  scopes, expiry and a 12-character display prefix.
+- Live keys are mirrored in memory by hash, so verifying a request is one SHA-256 and one map lookup
+  with no DB read; revoke removes the entry before it returns.
+- A key works only on routes of its own app (403 elsewhere) and never on admin routes (401).
+- Scopes: `records:read|write[:collection]`, `records:admin`, `realtime:subscribe`, `files:read|write[:bucket]`.
+  `records:admin` bypasses collection rules (like a superuser limited to the app). **Deviation from §4:**
+  every other key is anonymous to the rules and only narrowed by its scopes, because `@request.key.*`
+  does not exist yet. Realtime needs `realtime:subscribe` plus `records:read` for each collection.
+- Not yet: `users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp` scopes; IP/CIDR allowlist,
+  per-key rate limit, `publishable` keys, last-used time, `monolith keys` CLI, per-collection `records:admin`.
