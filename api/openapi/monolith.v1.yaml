@@ -734,6 +734,45 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/auth/config:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: getAuthConfig
+      description: |
+        Sign-in configuration of one app (superuser): email/password settings and the connected
+        OAuth providers, plus the `catalog` of providers the server can connect. Client secrets
+        are never returned, only `clientSecretSet`. Configuration only for now: sign-in itself
+        arrives with Phase 2 auth.
+      responses:
+        "200":
+          description: Auth configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthConfig" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: putAuthConfig
+      description: |
+        Replaces the configuration. A provider missing from `providers` is removed. In a provider,
+        an omitted `clientSecret` keeps the stored secret and an empty string clears it. Enabling a
+        provider needs `clientId`, a secret and its required `extra` fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AuthConfigInput" }
+      responses:
+        "200":
+          description: Saved configuration
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuthConfig" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
 components:
   securitySchemes:
     bearerAuth:
@@ -970,6 +1009,60 @@ components:
         writerQueue: { type: integer, description: Current writer queue depth }
         readerQueue: { type: integer, description: Current reader queue depth }
         readers: { type: integer }
+
+    EmailPasswordConfig:
+      type: object
+      properties:
+        enabled: { type: boolean, default: true }
+        allowSignup: { type: boolean, default: true }
+        minPasswordLength: { type: integer, minimum: 8, maximum: 72, default: 8 }
+
+    AuthProviderDef:
+      type: object
+      required: [id, name, fields, required]
+      properties:
+        id: { type: string, example: google }
+        name: { type: string, example: Google }
+        fields: { type: array, items: { type: string }, description: Provider-specific extra settings }
+        required: { type: array, items: { type: string }, description: Extra settings needed to enable it }
+
+    AuthProvider:
+      type: object
+      required: [id, name, enabled, clientId, clientSecretSet, extra, callbackPath]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        enabled: { type: boolean }
+        clientId: { type: string }
+        clientSecretSet: { type: boolean }
+        extra: { type: object, additionalProperties: { type: string } }
+        callbackPath: { type: string, description: Register this path on your public origin as the OAuth redirect URI }
+
+    AuthConfig:
+      type: object
+      required: [emailPassword, providers, catalog]
+      properties:
+        emailPassword: { $ref: "#/components/schemas/EmailPasswordConfig" }
+        providers: { type: array, items: { $ref: "#/components/schemas/AuthProvider" } }
+        catalog: { type: array, items: { $ref: "#/components/schemas/AuthProviderDef" } }
+
+    AuthProviderInput:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id: { type: string }
+        enabled: { type: boolean, default: false }
+        clientId: { type: string, maxLength: 256 }
+        clientSecret: { type: string, maxLength: 2048, description: Write-only. Omit to keep the stored secret. }
+        extra: { type: object, additionalProperties: { type: string } }
+
+    AuthConfigInput:
+      type: object
+      additionalProperties: false
+      properties:
+        emailPassword: { $ref: "#/components/schemas/EmailPasswordConfig" }
+        providers: { type: array, items: { $ref: "#/components/schemas/AuthProviderInput" } }
 
     AppStats:
       type: object

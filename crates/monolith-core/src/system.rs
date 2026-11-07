@@ -14,6 +14,7 @@ use monolith_store::{
 };
 
 use crate::app::{App, now_us};
+use crate::auth_config::{AuthConfigIn, AuthConfigView, StoredAuth};
 use crate::error::{CoreError, CoreResult};
 use crate::metrics::Metrics;
 use crate::schema::valid_name;
@@ -57,6 +58,12 @@ fn ct_eq(a: &[u8], b: &[u8]) -> bool {
 
 fn blocking_err(e: tokio::task::JoinError) -> CoreError {
     CoreError::Internal(e.to_string())
+}
+
+fn sys_delete(sql: &str, params: Vec<Value>) -> WriteOp {
+    let mut w = sys_write(sql, [0; 16], params);
+    w.mutations[0].op = Op::Delete;
+    w
 }
 
 fn sys_write(sql: &str, rid: Id, params: Vec<Value>) -> WriteOp {
@@ -266,6 +273,17 @@ impl Registry {
                 }],
             })
             .await?;
+        match self
+            .sys
+            .write(sys_delete(
+                "DELETE FROM settings WHERE key = ?",
+                vec![Value::Text(format!("auth:{name}").into())],
+            ))
+            .await
+        {
+            Ok(_) | Err(StoreError::NotFound) => {}
+            Err(e) => return Err(e.into()),
+        }
         let dir = self.app_dir(name);
         tokio::task::spawn_blocking(move || match std::fs::remove_dir_all(&dir) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
@@ -274,6 +292,49 @@ impl Registry {
         .await
         .map_err(blocking_err)?
         .map_err(|e| CoreError::Internal(e.to_string()))
+    }
+
+    // ---------- per-app auth configuration ----------
+
+    async fn stored_auth(&self, app: &str) -> CoreResult<StoredAuth> {
+        let rows = self
+            .sys
+            .query(Query {
+                sql: "SELECT value FROM settings WHERE key = ?".into(),
+                params: vec![Value::Text(format!("auth:{app}").into())],
+            })
+            .await?;
+        match rows.first().and_then(|r| r.first()) {
+            Some(Value::Blob(b)) => serde_json::from_slice(b)
+                .map_err(|e| CoreError::Internal(format!("auth config for {app}: {e}"))),
+            _ => Ok(StoredAuth::default()),
+        }
+    }
+
+    pub async fn auth_config(&self, app: &str) -> CoreResult<AuthConfigView> {
+        self.app_info(app).await?;
+        Ok(self.stored_auth(app).await?.view(app))
+    }
+
+    pub async fn put_auth_config(
+        &self,
+        app: &str,
+        input: AuthConfigIn,
+    ) -> CoreResult<AuthConfigView> {
+        self.app_info(app).await?;
+        let next = self.stored_auth(app).await?.apply(input)?;
+        let bytes = serde_json::to_vec(&next).map_err(|e| CoreError::Internal(e.to_string()))?;
+        self.sys
+            .write(sys_write(
+                "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [0; 16],
+                vec![
+                    Value::Text(format!("auth:{app}").into()),
+                    Value::Blob(bytes.into()),
+                ],
+            ))
+            .await?;
+        Ok(next.view(app))
     }
 
     // ---------- superusers ----------

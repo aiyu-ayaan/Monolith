@@ -298,6 +298,10 @@ pub fn router(reg: Arc<Registry>) -> Router {
         .route("/api/v1/apps/{app}/logs", get(list_logs))
         .route("/api/v1/apps/{app}/logs/slow", get(list_slow_logs))
         .route("/api/v1/apps/{app}/stats", get(app_stats))
+        .route(
+            "/api/v1/apps/{app}/auth/config",
+            get(get_auth_config).put(put_auth_config),
+        )
         .route("/api/v1/system/stats", get(system_stats))
         .route(
             "/_",
@@ -944,6 +948,28 @@ async fn app_stats(
         }
     };
     Ok(axum::Json(reg.app(&app).await?.stats(exact).await?).into_response())
+}
+
+// ---------- per-app auth configuration ----------
+
+async fn get_auth_config(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(reg.auth_config(&app).await?).into_response())
+}
+
+async fn put_auth_config(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let input = parse_json(body)?;
+    Ok(axum::Json(reg.put_auth_config(&app, input).await?).into_response())
 }
 
 // ---------- admin UI (doc 15 §4) ----------

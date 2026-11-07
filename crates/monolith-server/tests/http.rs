@@ -749,3 +749,77 @@ async fn stats_count_reads_writes_and_record_ops() {
     assert_eq!(g["traffic"]["total"]["creates"], 3);
     assert!(g["traffic"]["total"]["requests"].as_u64().unwrap() >= 8);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn app_auth_config_round_trip() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    let url = "/api/v1/apps/demo/auth/config";
+    // Needs a superuser.
+    assert_eq!(
+        t.call(Method::GET, url, None, false).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let r = t.call(Method::GET, url, None, true).await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert_eq!(r.body["emailPassword"]["enabled"], true);
+    assert!(r.body["providers"].as_array().unwrap().is_empty());
+    assert!(r.body["catalog"].as_array().unwrap().len() >= 10);
+    let put = json!({
+        "emailPassword": {"enabled": true, "allowSignup": false, "minPasswordLength": 12},
+        "providers": [
+            {"id":"google","enabled":true,"clientId":"gid","clientSecret":"shh"},
+            {"id":"github","enabled":false,"clientId":"hid"}
+        ]
+    });
+    let r = t.call(Method::PUT, url, Some(put), true).await;
+    assert_eq!(r.status, StatusCode::OK, "{:?}", r.body);
+    assert!(!r.body.to_string().contains("shh"), "secret leaked");
+    assert_eq!(r.body["providers"][0]["clientSecretSet"], true);
+    assert_eq!(r.body["providers"][1]["clientSecretSet"], false);
+    // Persisted, and an omitted secret keeps the stored one.
+    let r = t
+        .call(
+            Method::PUT,
+            url,
+            Some(json!({"providers":[{"id":"google","enabled":true,"clientId":"gid2"}]})),
+            true,
+        )
+        .await;
+    assert_eq!(r.body["providers"][0]["clientId"], "gid2");
+    assert_eq!(r.body["providers"][0]["clientSecretSet"], true);
+    let r = t.call(Method::GET, url, None, true).await;
+    assert_eq!(r.body["providers"].as_array().unwrap().len(), 1);
+    // Validation: unknown provider, enabling without a secret.
+    for bad in [
+        json!({"providers":[{"id":"nope"}]}),
+        json!({"providers":[{"id":"discord","enabled":true,"clientId":"x"}]}),
+    ] {
+        let r = t.call(Method::PUT, url, Some(bad), true).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{:?}", r.body);
+    }
+    assert_eq!(
+        t.call(Method::GET, "/api/v1/apps/ghost/auth/config", None, true)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+    // Deleting the app removes its config.
+    t.call(Method::DELETE, "/api/v1/system/apps/demo", None, true)
+        .await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    let r = t.call(Method::GET, url, None, true).await;
+    assert!(r.body["providers"].as_array().unwrap().is_empty());
+}
