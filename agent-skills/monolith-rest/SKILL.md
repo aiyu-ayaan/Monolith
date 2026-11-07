@@ -44,6 +44,8 @@ Check this list before relying on a feature; the rest of this page is the target
   linkedin twitch oidc`). `clientSecret` is write-only: omit it to keep the stored one, `""` clears it;
   responses only show `clientSecretSet`. Enabling a provider needs client id, secret and its required
   `extra` fields (Apple `teamId`+`keyId`, OIDC `issuer`). Config only: the sign-in flow is Phase 2.
+- Backups (superuser): `POST /api/v1/apps/{app}/backups` takes a snapshot, `GET` lists, `GET .../backups/{name}` downloads the
+  SQLite file, `DELETE` removes it, `POST .../backups:restore {backup,newApp}` creates a new app from it. No schedule yet.
 - Not yet: user tokens, API keys, `openapi.json`, 429 rate limits.
 - Status codes: create rule rejects → 403; update/delete rule rejects or record missing → 404;
   rule `null` → 403 for non-superusers; unique/FK violation → 409; stale `If-Match` → 412;

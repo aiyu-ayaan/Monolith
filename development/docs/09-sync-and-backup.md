@@ -169,3 +169,12 @@ Any external app (not built on Monolith) can push its data into a Monolith app f
 safekeeping using the plug-and-play API: create an app `myapp-archive`, create a key
 with `records:write`, then `POST /sync/push` or batch insert. The same backup policies
 then protect that data.
+
+## Implemented today (backups v1, `crates/monolith-core/src/backup.rs`)
+
+- Manual per-app snapshots via `VACUUM INTO` (consistent, the writer keeps running) into
+  `<data>/backups/<app>/b<UTC timestamp>.db`; plain SQLite files, not yet `tar.zst`.
+- `GET|POST /api/v1/apps/{app}/backups`, `GET|DELETE .../backups/{name}` (download streams in 256 KiB chunks),
+  `POST .../backups:restore {backup, newApp}` restores into a **new** app. Admin UI: Backups page.
+- Not yet: schedules and retention (B2), zstd, S3 targets, WAL shipping, encryption (B4), in-place restore (B3),
+  `logs.db`/files in the archive, the `monolith backup` CLI. Backups are kept when the app is deleted.

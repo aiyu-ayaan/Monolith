@@ -105,6 +105,7 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Admin UI dashboards: landing = server tiles + per-app cards + traffic charts; project overview = tiles, collections, sign-in status, charts
 - [x] Realtime v1 (SSE, whole-collection topics, per-audience encode, bounded queues, shutdown close); see `docs/07 §9`. Still to do:
       WebSocket + channels, filtered/record topics, `since` replay, row capture in the writer (deletes), benchmark S7
+- [x] Backups v1 (manual snapshot, list, download, delete, restore into a new app; docs/09 'Implemented today'). Still: schedule + retention, zstd, S3, WAL shipping, in-place restore, CLI
 - [x] Admin UI: Logs and Access rules pages
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md,

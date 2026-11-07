@@ -911,3 +911,117 @@ async fn realtime_sse_streams_changes() {
     assert_eq!(stats.body["realtime"]["connections"], 1);
     assert!(stats.body["realtime"]["events"].as_u64().unwrap() >= 1);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn backups_create_list_download_restore_delete() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    t.call(
+        Method::POST,
+        "/api/v1/apps/demo/collections",
+        Some(json!({"name":"posts","fields":[{"name":"title","type":"text"}],"rules":{"list":"","view":""}})),
+        true,
+    )
+    .await;
+    t.call(
+        Method::POST,
+        "/api/v1/apps/demo/collections/posts/records",
+        Some(json!({"title":"kept"})),
+        true,
+    )
+    .await;
+    let url = "/api/v1/apps/demo/backups";
+    assert_eq!(
+        t.call(Method::GET, url, None, false).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        t.call(Method::GET, url, None, true).await.body["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let b = t.call(Method::POST, url, None, true).await;
+    assert_eq!(b.status, StatusCode::CREATED, "{:?}", b.body);
+    let name = b.body["name"].as_str().unwrap().to_owned();
+    assert!(b.body["bytes"].as_u64().unwrap() > 0);
+    assert_eq!(
+        t.call(Method::GET, url, None, true).await.body["items"][0]["name"],
+        name.as_str()
+    );
+
+    // Download is the raw SQLite file.
+    let res = t
+        .app
+        .clone()
+        .oneshot(
+            Request::get(format!("{url}/{name}"))
+                .header("authorization", format!("Bearer {}", t.token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+    assert!(bytes.starts_with(b"SQLite format 3\0"));
+    assert_eq!(bytes.len() as u64, b.body["bytes"].as_u64().unwrap());
+
+    // Restore into a new app, then the data is there; a taken name conflicts.
+    let r = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/demo/backups:restore",
+            Some(json!({"backup": name, "newApp": "copy"})),
+            true,
+        )
+        .await;
+    assert_eq!(r.status, StatusCode::CREATED, "{:?}", r.body);
+    let list = t
+        .call(
+            Method::GET,
+            "/api/v1/apps/copy/collections/posts/records",
+            None,
+            true,
+        )
+        .await;
+    assert_eq!(list.body["items"][0]["title"], "kept");
+    let dup = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/demo/backups:restore",
+            Some(json!({"backup": name, "newApp": "copy"})),
+            true,
+        )
+        .await;
+    assert_eq!(dup.status, StatusCode::CONFLICT, "{:?}", dup.body);
+
+    // Names are validated before touching the filesystem.
+    for bad in ["..%2Fdata.db", "x.db", "b1.db"] {
+        assert_eq!(
+            t.call(Method::DELETE, &format!("{url}/{bad}"), None, true)
+                .await
+                .status,
+            StatusCode::NOT_FOUND,
+            "{bad}"
+        );
+    }
+    assert_eq!(
+        t.call(Method::DELETE, &format!("{url}/{name}"), None, true)
+            .await
+            .status,
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        t.call(Method::GET, url, None, true).await.body["items"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}

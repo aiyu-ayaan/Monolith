@@ -300,6 +300,15 @@ pub fn router(reg: Arc<Registry>) -> Router {
         .route("/api/v1/apps/{app}/stats", get(app_stats))
         .route("/api/v1/apps/{app}/realtime", get(realtime))
         .route(
+            "/api/v1/apps/{app}/backups",
+            get(list_backups).post(create_backup),
+        )
+        .route("/api/v1/apps/{app}/backups:restore", post(restore_backup))
+        .route(
+            "/api/v1/apps/{app}/backups/{name}",
+            get(download_backup).delete(delete_backup),
+        )
+        .route(
             "/api/v1/apps/{app}/auth/config",
             get(get_auth_config).put(put_auth_config),
         )
@@ -1017,6 +1026,111 @@ async fn realtime(
     );
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
     h.insert("x-accel-buffering", HeaderValue::from_static("no"));
+    Ok(res)
+}
+
+// ---------- backups (doc 09 part B) ----------
+
+async fn list_backups(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    reg.app_info(&app).await?;
+    Ok(axum::Json(json!({"items": reg.list_backups(&app).await?})).into_response())
+}
+
+async fn create_backup(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let b = reg.create_backup(&app).await?;
+    Ok((StatusCode::CREATED, axum::Json(b)).into_response())
+}
+
+async fn delete_backup(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, name)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    reg.delete_backup(&app, &name).await?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RestoreReq {
+    backup: String,
+    new_app: String,
+}
+
+async fn restore_backup(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let r: RestoreReq = parse_json(body)?;
+    let a = reg.restore_backup(&app, &r.backup, &r.new_app).await?;
+    Ok((StatusCode::CREATED, axum::Json(app_json(&a))).into_response())
+}
+
+/// Reads a file in 256 KiB chunks on a blocking thread; at most 4 chunks are buffered.
+struct FileStream(tokio::sync::mpsc::Receiver<std::io::Result<Bytes>>);
+
+impl futures_core::Stream for FileStream {
+    type Item = std::io::Result<Bytes>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.poll_recv(cx)
+    }
+}
+
+async fn download_backup(
+    State(reg): St,
+    headers: HeaderMap,
+    Path((app, name)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    let (mut file, len) = reg.open_backup(&app, &name).await?;
+    let (tx, rx) = tokio::sync::mpsc::channel(4);
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        loop {
+            let mut buf = vec![0u8; 256 * 1024];
+            match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.truncate(n);
+                    if tx.blocking_send(Ok(Bytes::from(buf))).is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.blocking_send(Err(e));
+                    break;
+                }
+            }
+        }
+    });
+    let mut res = Response::new(axum::body::Body::from_stream(FileStream(rx)));
+    let h = res.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/vnd.sqlite3"),
+    );
+    h.insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    if let Ok(v) = HeaderValue::from_str(&format!("attachment; filename=\"{app}-{name}\"")) {
+        h.insert(header::CONTENT_DISPOSITION, v);
+    }
     Ok(res)
 }
 

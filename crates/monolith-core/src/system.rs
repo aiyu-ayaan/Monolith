@@ -140,6 +140,10 @@ impl Registry {
         })
     }
 
+    pub(crate) fn data_dir(&self) -> &Path {
+        &self.dir
+    }
+
     pub(crate) fn app_dir(&self, name: &str) -> PathBuf {
         self.dir.join("apps").join(name)
     }
@@ -184,6 +188,13 @@ impl Registry {
     }
 
     pub async fn create_app(&self, name: &str) -> CoreResult<AppInfo> {
+        let info = self.reserve_app(name).await?;
+        self.app(name).await?;
+        Ok(info)
+    }
+
+    /// Registers the name without opening the app (restore copies the data file in first).
+    pub(crate) async fn reserve_app(&self, name: &str) -> CoreResult<AppInfo> {
         if !valid_name(name) {
             return Err(CoreError::BadRequest(format!("invalid app name '{name}'")));
         }
@@ -199,7 +210,6 @@ impl Registry {
                 StoreError::Constraint(_) => CoreError::Conflict(format!("app '{name}' exists")),
                 e => e.into(),
             })?;
-        self.app(name).await?;
         Ok(AppInfo {
             name: name.to_owned(),
             created_us: now,

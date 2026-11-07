@@ -765,6 +765,91 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "503": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/backups:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: listBackups
+      description: Snapshot backups of the app, newest first (superuser).
+      responses:
+        "200":
+          description: Backups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Backup" } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    post:
+      operationId: createBackup
+      description: |
+        Takes a consistent snapshot (`VACUUM INTO`) while the app keeps serving. Stored under
+        `<data>/backups/<app>/`. Backups outlive the app.
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Backup" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/backups/{name}:
+    parameters:
+      - $ref: "#/components/parameters/App"
+      - name: name
+        in: path
+        required: true
+        schema: { type: string, pattern: "^b[0-9]{17}\\.db$" }
+    get:
+      operationId: downloadBackup
+      description: Streams the snapshot, a plain SQLite database file.
+      responses:
+        "200":
+          description: SQLite file
+          content:
+            application/vnd.sqlite3:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    delete:
+      operationId: deleteBackup
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+
+  /api/v1/apps/{app}/backups:restore:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    post:
+      operationId: restoreBackup
+      description: Creates a new app from a backup. The source app is untouched. In-place restore is not available yet.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [backup, newApp]
+              properties:
+                backup: { type: string }
+                newApp: { $ref: "#/components/schemas/Name" }
+      responses:
+        "201":
+          description: New app
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/App" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /api/v1/apps/{app}/auth/config:
     parameters:
       - $ref: "#/components/parameters/App"
@@ -1040,6 +1125,14 @@ components:
         writerQueue: { type: integer, description: Current writer queue depth }
         readerQueue: { type: integer, description: Current reader queue depth }
         readers: { type: integer }
+
+    Backup:
+      type: object
+      required: [name, bytes, created]
+      properties:
+        name: { type: string, example: b20261107134512123.db }
+        bytes: { type: integer }
+        created: { type: string, format: date-time }
 
     EmailPasswordConfig:
       type: object
