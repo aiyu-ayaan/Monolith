@@ -787,6 +787,7 @@ name = "monolith-server"
 version = "0.0.0"
 dependencies = [
  "axum",
+ "futures-core",
  "monolith-core",
  "monolith-store",
  "rpassword",

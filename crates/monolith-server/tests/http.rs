@@ -823,3 +823,91 @@ async fn app_auth_config_round_trip() {
     let r = t.call(Method::GET, url, None, true).await;
     assert!(r.body["providers"].as_array().unwrap().is_empty());
 }
+
+/// Next body chunk as text (SSE frames arrive one per chunk).
+async fn chunk(body: &mut Body) -> Option<String> {
+    use axum::body::HttpBody;
+    let f = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        std::future::poll_fn(|cx| std::pin::Pin::new(&mut *body).poll_frame(cx)),
+    )
+    .await
+    .ok()??
+    .ok()?;
+    Some(String::from_utf8_lossy(&f.into_data().ok()?).into_owned())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn realtime_sse_streams_changes() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    let c = t
+        .call(
+            Method::POST,
+            "/api/v1/apps/demo/collections",
+            Some(json!({"name":"posts","fields":[{"name":"title","type":"text"}],"rules":{"list":"","view":""}})),
+            true,
+        )
+        .await;
+    assert_eq!(c.status, StatusCode::CREATED, "{:?}", c.body);
+    let url = "/api/v1/apps/demo/realtime?collections=posts";
+    // No collections, unknown collection.
+    assert_eq!(
+        t.call(Method::GET, "/api/v1/apps/demo/realtime", None, true)
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        t.call(
+            Method::GET,
+            "/api/v1/apps/demo/realtime?collections=nope",
+            None,
+            true
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+
+    let res = t
+        .app
+        .clone()
+        .oneshot(
+            Request::get(url)
+                .header("authorization", format!("Bearer {}", t.token))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+    let mut body = res.into_body();
+    assert!(chunk(&mut body).await.unwrap().starts_with("event: hello"));
+    t.call(
+        Method::POST,
+        "/api/v1/apps/demo/collections/posts/records",
+        Some(json!({"title":"live"})),
+        true,
+    )
+    .await;
+    let ev = chunk(&mut body).await.unwrap();
+    assert!(
+        ev.contains("event: record")
+            && ev.contains("\"op\":\"create\"")
+            && ev.contains("\"title\":\"live\""),
+        "{ev}"
+    );
+    let stats = t
+        .call(Method::GET, "/api/v1/apps/demo/stats", None, true)
+        .await;
+    assert_eq!(stats.body["realtime"]["connections"], 1);
+    assert!(stats.body["realtime"]["events"].as_u64().unwrap() >= 1);
+}

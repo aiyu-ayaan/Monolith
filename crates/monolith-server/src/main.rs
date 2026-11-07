@@ -67,9 +67,12 @@ async fn serve(data: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             "\n  No superuser yet. Open this one-time link within 1 hour to create one:\n\n  http://{host}/_/#/install/{t}\n\n  (Restart the server for a new link.)\n"
         );
     }
+    let closing = reg.clone();
     axum::serve(listener, monolith_server::router(reg))
-        .with_graceful_shutdown(async {
+        .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
+            // Open event streams would otherwise keep the shutdown waiting.
+            closing.close_realtime();
         })
         .await?;
     Ok(())

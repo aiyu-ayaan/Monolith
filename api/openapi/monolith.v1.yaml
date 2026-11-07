@@ -734,6 +734,37 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/realtime:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: realtime
+      description: |
+        Server-Sent Events stream of record changes (doc 07). Events: `hello` (`{conn, hb}`),
+        `record` (`{op: create|update|delete, collection, seq, record}`, SSE `id` = seq),
+        `resync` (`{reason}`: refetch), plus `: hb` comments every `hb` seconds.
+        A `record` event carries the row as it is when dispatched, so rapid writes coalesce.
+        Superusers see everything including hidden fields. Others need a non-relational view
+        rule and receive only rows it allows; `delete` events reach them only when the view
+        rule is public. A slow client (256 queued frames) is dropped and must reconnect and refetch.
+        Send the token in `Authorization`; browsers use `fetch` streaming, not `EventSource`.
+      parameters:
+        - name: collections
+          in: query
+          required: true
+          schema: { type: string, example: "posts,comments" }
+          description: Comma-separated collection names (1 to 32).
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+
   /api/v1/apps/{app}/auth/config:
     parameters:
       - $ref: "#/components/parameters/App"
@@ -1066,8 +1097,15 @@ components:
 
     AppStats:
       type: object
-      required: [app, since, schemaVersion, traffic, store, dbBytes, walBytes, collections]
+      required: [app, since, schemaVersion, traffic, store, dbBytes, walBytes, collections, realtime]
       properties:
+        realtime:
+          type: object
+          required: [connections, events, dropped]
+          properties:
+            connections: { type: integer, description: Open realtime subscriptions }
+            events: { type: integer, description: Frames queued since the app loaded }
+            dropped: { type: integer, description: Connections dropped for a full queue }
         app: { $ref: "#/components/schemas/Name" }
         since: { type: string, format: date-time, description: When the app was loaded }
         schemaVersion: { type: integer }

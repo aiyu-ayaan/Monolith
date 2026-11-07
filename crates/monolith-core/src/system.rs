@@ -207,6 +207,13 @@ impl Registry {
     }
 
     /// Already-opened app, without touching disk.
+    /// Ends every realtime stream so a graceful shutdown does not wait on them.
+    pub fn close_realtime(&self) {
+        for a in self.apps.read().unwrap_or_else(|e| e.into_inner()).values() {
+            a.hub.close();
+        }
+    }
+
     pub fn loaded_app(&self, name: &str) -> Option<Arc<App>> {
         self.apps
             .read()

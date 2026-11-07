@@ -8,6 +8,7 @@ pub mod debug;
 pub mod error;
 pub mod list;
 pub mod metrics;
+pub mod realtime;
 pub mod schema;
 pub mod system;
 

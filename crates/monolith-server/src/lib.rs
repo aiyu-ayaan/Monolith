@@ -298,6 +298,7 @@ pub fn router(reg: Arc<Registry>) -> Router {
         .route("/api/v1/apps/{app}/logs", get(list_logs))
         .route("/api/v1/apps/{app}/logs/slow", get(list_slow_logs))
         .route("/api/v1/apps/{app}/stats", get(app_stats))
+        .route("/api/v1/apps/{app}/realtime", get(realtime))
         .route(
             "/api/v1/apps/{app}/auth/config",
             get(get_auth_config).put(put_auth_config),
@@ -948,6 +949,75 @@ async fn app_stats(
         }
     };
     Ok(axum::Json(reg.app(&app).await?.stats(exact).await?).into_response())
+}
+
+// ---------- realtime (SSE, doc 07) ----------
+
+/// One SSE frame as bytes without copying: the `Arc<str>` is shared with every receiver.
+struct FrameBytes(monolith_core::realtime::Frame);
+
+impl AsRef<[u8]> for FrameBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+/// Frames from the hub plus a heartbeat comment so proxies keep the stream open.
+struct EventStream {
+    sub: monolith_core::realtime::Subscription,
+    hb: tokio::time::Interval,
+}
+
+impl futures_core::Stream for EventStream {
+    type Item = Result<Bytes, std::convert::Infallible>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        if let Poll::Ready(f) = self.sub.rx.poll_recv(cx) {
+            return Poll::Ready(f.map(|f| Ok(Bytes::from_owner(FrameBytes(f)))));
+        }
+        match self.hb.poll_tick(cx) {
+            Poll::Ready(_) => Poll::Ready(Some(Ok(Bytes::from_static(b": hb\n\n")))),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// `GET /api/v1/apps/{app}/realtime?collections=a,b`: record changes as Server-Sent Events.
+async fn realtime(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    Query(q): Query<HashMap<String, String>>,
+) -> ApiResult<Response> {
+    let p = principal(&reg, &headers)?;
+    let names: Vec<String> = q
+        .get("collections")
+        .map(|s| {
+            s.split(',')
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default();
+    let sub = reg.app(&app).await?.subscribe(&p, &names)?;
+    let mut hb = tokio::time::interval(std::time::Duration::from_secs(
+        monolith_core::realtime::HEARTBEAT_S,
+    ));
+    hb.reset(); // the first tick would fire immediately
+    let mut res = Response::new(axum::body::Body::from_stream(EventStream { sub, hb }));
+    let h = res.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    h.insert("x-accel-buffering", HeaderValue::from_static("no"));
+    Ok(res)
 }
 
 // ---------- per-app auth configuration ----------

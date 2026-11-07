@@ -418,6 +418,7 @@ pub struct AppStats {
     pub db_bytes: u64,
     pub wal_bytes: u64,
     pub collections: Vec<CollectionStats>,
+    pub realtime: crate::realtime::RealtimeStats,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -524,6 +525,7 @@ impl App {
             db_bytes,
             wal_bytes,
             collections,
+            realtime: self.hub.stats(),
         })
     }
 }

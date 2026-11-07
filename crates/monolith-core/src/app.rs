@@ -57,7 +57,7 @@ impl Principal {
         }
     }
 
-    fn ctx<'a>(&'a self, body: Option<(&'a [Value], u64)>, now: i64) -> Ctx<'a> {
+    pub(crate) fn ctx<'a>(&'a self, body: Option<(&'a [Value], u64)>, now: i64) -> Ctx<'a> {
         Ctx {
             auth: self.auth.as_ref(),
             body: body.map(|(b, _)| b),
@@ -149,6 +149,7 @@ pub struct App {
     pub(crate) logs: Mutex<VecDeque<RequestLog>>,
     pub metrics: Arc<Metrics>,
     pub(crate) db_path: PathBuf,
+    pub(crate) hub: crate::realtime::Hub,
 }
 
 fn rule_ref<'a>(
@@ -207,9 +208,9 @@ struct ExpandNode {
     children: Vec<ExpandNode>,
 }
 
-type MultiRelMaps = Vec<(usize, HashMap<Id, Vec<Id>>)>;
+pub(crate) type MultiRelMaps = Vec<(usize, HashMap<Id, Vec<Id>>)>;
 
-fn row_multi<'a>(row: &[Value], maps: &'a MultiRelMaps) -> Vec<(usize, &'a [Id])> {
+pub(crate) fn row_multi<'a>(row: &[Value], maps: &'a MultiRelMaps) -> Vec<(usize, &'a [Id])> {
     let Some(Value::Blob(b)) = row.first() else {
         return Vec::new();
     };
@@ -433,6 +434,7 @@ impl App {
             logs: Mutex::new(VecDeque::new()),
             metrics,
             db_path: path.to_owned(),
+            hub: Default::default(),
         })
     }
 
@@ -830,7 +832,7 @@ impl App {
     }
 
     /// Batched junction lookup for all multi-relation fields on `c` across `rows`.
-    async fn load_multi_rels(
+    pub(crate) async fn load_multi_rels(
         &self,
         c: &Collection,
         rows: &[Vec<Value>],

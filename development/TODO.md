@@ -103,6 +103,9 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Per-app Authentication (Firebase-style): `GET|PUT /api/v1/apps/{app}/auth/config` (email/password + 11 OAuth/OIDC providers,
       write-only secrets, stored in system.db), Admin UI Authentication page (provider list, add/edit/remove, redirect URI)
 - [x] Admin UI dashboards: landing = server tiles + per-app cards + traffic charts; project overview = tiles, collections, sign-in status, charts
+- [x] Realtime v1 (SSE, whole-collection topics, per-audience encode, bounded queues, shutdown close); see `docs/07 §9`. Still to do:
+      WebSocket + channels, filtered/record topics, `since` replay, row capture in the writer (deletes), benchmark S7
+- [x] Admin UI: Logs and Access rules pages
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md,
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
