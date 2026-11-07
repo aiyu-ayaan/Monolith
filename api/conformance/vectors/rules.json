@@ -1,0 +1,942 @@
+{
+  "description": "Semantic rule/filter vectors ported from PocketBase v0.40.6 (commit 7f2773ec): tools/search/filter_test.go, identifier_macros.go, core/record_field_resolver_test.go. PocketBase asserts generated SQL text; these assert the visible records, which is what any implementation must match. Titles are unique; 'expect' lists titles in any order. '$alice' / '$bob' are replaced by the fixture user ids. Write-rule outcomes: ok | forbidden (403) | not_found (404) | bad_request (400). 'known_gaps' lists PocketBase behaviour Monolith does not implement yet: each must still be rejected with 400; when one is implemented, move it into 'filters'.",
+  "source": "pocketbase@7f2773ec",
+  "users": [
+    "alice",
+    "bob"
+  ],
+  "items": {
+    "collection": {
+      "name": "items",
+      "fields": [
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "n",
+          "type": "number"
+        },
+        {
+          "name": "flag",
+          "type": "bool"
+        },
+        {
+          "name": "note",
+          "type": "text"
+        },
+        {
+          "name": "kind",
+          "type": "select",
+          "values": [
+            "a",
+            "b",
+            "c"
+          ]
+        },
+        {
+          "name": "due",
+          "type": "date"
+        },
+        {
+          "name": "friends",
+          "type": "relation",
+          "collection": "users",
+          "maxSelect": 5
+        }
+      ],
+      "rules": {
+        "list": "",
+        "view": ""
+      }
+    },
+    "records": [
+      {
+        "title": "Alpha",
+        "n": 1,
+        "flag": true,
+        "note": "",
+        "kind": "a",
+        "due": "2020-01-01 00:00:00.000Z"
+      },
+      {
+        "title": "beta",
+        "n": 5,
+        "flag": false,
+        "kind": "b",
+        "due": "2030-06-15 00:00:00.000Z",
+        "friends": [
+          "$alice",
+          "$bob"
+        ]
+      },
+      {
+        "title": "Gamma 100%",
+        "n": 10,
+        "flag": true,
+        "note": "x",
+        "kind": "a",
+        "friends": [
+          "$bob"
+        ]
+      },
+      {
+        "title": "alpha_beta",
+        "flag": false,
+        "note": "alpha",
+        "kind": "c"
+      },
+      {
+        "title": "alphaxbeta",
+        "n": 5,
+        "flag": true,
+        "note": "ALPHA",
+        "kind": "b"
+      }
+    ],
+    "filters": [
+      {
+        "name": "empty string equals null",
+        "filter": "note = ''",
+        "expect": [
+          "Alpha",
+          "beta"
+        ]
+      },
+      {
+        "name": "= null matches empty and NULL",
+        "filter": "note = null",
+        "expect": [
+          "Alpha",
+          "beta"
+        ]
+      },
+      {
+        "name": "!= null",
+        "filter": "note != null",
+        "expect": [
+          "Gamma 100%",
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "!= empty string",
+        "filter": "note != ''",
+        "expect": [
+          "Gamma 100%",
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "number = null",
+        "filter": "n = null",
+        "expect": [
+          "alpha_beta"
+        ]
+      },
+      {
+        "name": "number != null",
+        "filter": "n != null",
+        "expect": [
+          "Alpha",
+          "beta",
+          "Gamma 100%",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "bool true literal",
+        "filter": "flag = true",
+        "expect": [
+          "Alpha",
+          "Gamma 100%",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "bool != true",
+        "filter": "flag != true",
+        "expect": [
+          "beta",
+          "alpha_beta"
+        ]
+      },
+      {
+        "name": "bool false literal",
+        "filter": "flag = false",
+        "expect": [
+          "beta",
+          "alpha_beta"
+        ]
+      },
+      {
+        "name": "> skips NULL",
+        "filter": "n > 1",
+        "expect": [
+          "beta",
+          "Gamma 100%",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "range",
+        "filter": "n >= 5 && n < 10",
+        "expect": [
+          "beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "or of comparisons",
+        "filter": "n <= 1 || n = 10",
+        "expect": [
+          "Alpha",
+          "Gamma 100%"
+        ]
+      },
+      {
+        "name": "!= is IS NOT (NULL counts as different)",
+        "filter": "n != 5",
+        "expect": [
+          "Alpha",
+          "Gamma 100%",
+          "alpha_beta"
+        ]
+      },
+      {
+        "name": "= literal is case sensitive",
+        "filter": "title = 'alpha'",
+        "expect": []
+      },
+      {
+        "name": "= literal exact",
+        "filter": "title = 'Alpha'",
+        "expect": [
+          "Alpha"
+        ]
+      },
+      {
+        "name": "~ wraps with % and ignores ASCII case",
+        "filter": "title ~ 'alpha'",
+        "expect": [
+          "Alpha",
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "~ treats _ literally when no %",
+        "filter": "title ~ 'alpha_beta'",
+        "expect": [
+          "alpha_beta"
+        ]
+      },
+      {
+        "name": "~ with explicit % does not wrap",
+        "filter": "title ~ 'alpha%beta'",
+        "expect": [
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "~ prefix pattern",
+        "filter": "title ~ 'a%'",
+        "expect": [
+          "Alpha",
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "!~",
+        "filter": "title !~ 'alpha'",
+        "expect": [
+          "beta",
+          "Gamma 100%"
+        ]
+      },
+      {
+        "name": "~ number-like text",
+        "filter": "title ~ '100'",
+        "expect": [
+          "Gamma 100%"
+        ]
+      },
+      {
+        "name": ":lower",
+        "filter": "title:lower = 'alpha'",
+        "expect": [
+          "Alpha"
+        ]
+      },
+      {
+        "name": "select equals",
+        "filter": "kind = 'a'",
+        "expect": [
+          "Alpha",
+          "Gamma 100%"
+        ]
+      },
+      {
+        "name": "select not equals",
+        "filter": "kind != 'a'",
+        "expect": [
+          "beta",
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "multi relation any-of =",
+        "filter": "friends ?= '$alice'",
+        "expect": [
+          "beta"
+        ]
+      },
+      {
+        "name": "multi relation any-of = (bob)",
+        "filter": "friends ?= '$bob'",
+        "expect": [
+          "beta",
+          "Gamma 100%"
+        ]
+      },
+      {
+        "name": "multi relation any-of !=",
+        "filter": "friends ?!= '$alice'",
+        "expect": [
+          "beta",
+          "Gamma 100%"
+        ]
+      },
+      {
+        "name": "relation path any-of",
+        "filter": "friends.name ?= 'alice'",
+        "expect": [
+          "beta"
+        ]
+      },
+      {
+        "name": "@now past",
+        "filter": "due < @now",
+        "expect": [
+          "Alpha"
+        ]
+      },
+      {
+        "name": "@now future",
+        "filter": "due > @now",
+        "expect": [
+          "beta"
+        ]
+      },
+      {
+        "name": "@yearStart",
+        "filter": "due < @yearStart",
+        "expect": [
+          "Alpha"
+        ]
+      },
+      {
+        "name": "date literal range",
+        "filter": "due >= '2020-01-01' && due < '2021-01-01'",
+        "expect": [
+          "Alpha"
+        ]
+      },
+      {
+        "name": "&& binds tighter than ||",
+        "filter": "flag = true && n > 1 || title = 'beta'",
+        "expect": [
+          "beta",
+          "Gamma 100%",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "parentheses",
+        "filter": "flag = true && (n > 1 || title = 'beta')",
+        "expect": [
+          "Gamma 100%",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "literal comparison true",
+        "filter": "1 = 1",
+        "expect": [
+          "Alpha",
+          "beta",
+          "Gamma 100%",
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "literal comparison false",
+        "filter": "1 = 2",
+        "expect": []
+      },
+      {
+        "name": "created is filterable",
+        "filter": "created > '2000-01-01' && created < @now",
+        "expect": [
+          "Alpha",
+          "beta",
+          "Gamma 100%",
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "~ escaped % is literal",
+        "filter": "title ~ '100\\\\%'",
+        "expect": [
+          "Gamma 100%"
+        ]
+      },
+      {
+        "name": "~ explicit _ with % is a wildcard",
+        "filter": "title ~ 'alpha_%'",
+        "expect": [
+          "alpha_beta",
+          "alphaxbeta"
+        ]
+      },
+      {
+        "name": "@todayStart <= @now <= @todayEnd",
+        "filter": "@now >= @todayStart && @now <= @todayEnd && n = 10",
+        "expect": [
+          "Gamma 100%"
+        ]
+      },
+      {
+        "name": "@tomorrow is after @now",
+        "filter": "due > @now && due < @tomorrow",
+        "expect": []
+      },
+      {
+        "name": "@year as number",
+        "filter": "@year >= 2026 && n = 1",
+        "expect": [
+          "Alpha"
+        ]
+      }
+    ],
+    "invalid_filters": [
+      "(n > 1",
+      "n + 1",
+      "n > 1 &&",
+      "unknown = 1",
+      "title = 1",
+      "flag > true"
+    ],
+    "known_gaps": [
+      {
+        "name": "literal ~ column wraps the column",
+        "filter": "'alpha' ~ title",
+        "expect": [
+          "Alpha"
+        ],
+        "gap": "~ with a field on the right side is not supported (`~` takes a value)"
+      },
+      {
+        "name": "column ~ column wraps the right column",
+        "filter": "title ~ note",
+        "expect": [
+          "Alpha",
+          "alpha_beta",
+          "alphaxbeta"
+        ],
+        "gap": "~ with a field on the right side is not supported (`~` takes a value)"
+      },
+      {
+        "name": "multi relation all-of =",
+        "filter": "friends = '$bob' && friends:length = 1",
+        "expect": [
+          "Gamma 100%"
+        ],
+        "gap": ":length modifier not implemented"
+      },
+      {
+        "name": ":length = 2",
+        "filter": "friends:length = 2",
+        "expect": [
+          "beta"
+        ],
+        "gap": ":length modifier not implemented"
+      },
+      {
+        "name": ":length > 0",
+        "filter": "friends:length > 0",
+        "expect": [
+          "beta",
+          "Gamma 100%"
+        ],
+        "gap": ":length modifier not implemented"
+      },
+      {
+        "name": ":length = 0",
+        "filter": "friends:length = 0",
+        "expect": [
+          "Alpha",
+          "alpha_beta",
+          "alphaxbeta"
+        ],
+        "gap": ":length modifier not implemented"
+      }
+    ]
+  },
+  "docs": {
+    "collection": {
+      "name": "docs",
+      "fields": [
+        {
+          "name": "title",
+          "type": "text"
+        },
+        {
+          "name": "owner",
+          "type": "relation",
+          "collection": "users"
+        },
+        {
+          "name": "public",
+          "type": "bool"
+        },
+        {
+          "name": "status",
+          "type": "select",
+          "values": [
+            "draft",
+            "live"
+          ]
+        }
+      ]
+    },
+    "records": [
+      {
+        "title": "d1",
+        "owner": "$alice",
+        "public": true,
+        "status": "draft"
+      },
+      {
+        "title": "d2",
+        "owner": "$alice",
+        "public": false,
+        "status": "live"
+      },
+      {
+        "title": "d3",
+        "owner": "$bob",
+        "public": true,
+        "status": "live"
+      },
+      {
+        "title": "d4",
+        "owner": "$bob",
+        "public": false,
+        "status": "draft"
+      }
+    ],
+    "list_rules": [
+      {
+        "name": "public rows",
+        "rule": "public = true",
+        "expect": {
+          "anon": [
+            "d1",
+            "d3"
+          ],
+          "alice": [
+            "d1",
+            "d3"
+          ],
+          "bob": [
+            "d1",
+            "d3"
+          ],
+          "su": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ]
+        }
+      },
+      {
+        "name": "owner only",
+        "rule": "@request.auth.id != '' && owner = @request.auth.id",
+        "expect": {
+          "anon": [],
+          "alice": [
+            "d1",
+            "d2"
+          ],
+          "bob": [
+            "d3",
+            "d4"
+          ],
+          "su": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ]
+        }
+      },
+      {
+        "name": "public or owner",
+        "rule": "public = true || owner = @request.auth.id",
+        "expect": {
+          "anon": [
+            "d1",
+            "d3"
+          ],
+          "alice": [
+            "d1",
+            "d2",
+            "d3"
+          ],
+          "bob": [
+            "d1",
+            "d3",
+            "d4"
+          ],
+          "su": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ]
+        }
+      },
+      {
+        "name": "guests only",
+        "rule": "@request.auth.id = ''",
+        "expect": {
+          "anon": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ],
+          "alice": [],
+          "bob": [],
+          "su": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ]
+        }
+      },
+      {
+        "name": "authenticated only",
+        "rule": "@request.auth.id != ''",
+        "expect": {
+          "anon": [],
+          "alice": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ],
+          "bob": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ],
+          "su": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ]
+        }
+      },
+      {
+        "name": "relation path",
+        "rule": "owner.name = 'alice'",
+        "expect": {
+          "anon": [
+            "d1",
+            "d2"
+          ],
+          "alice": [
+            "d1",
+            "d2"
+          ],
+          "bob": [
+            "d1",
+            "d2"
+          ],
+          "su": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ]
+        }
+      },
+      {
+        "name": "null rule is superusers only",
+        "rule": null,
+        "expect": {
+          "anon": "forbidden",
+          "alice": "forbidden",
+          "bob": "forbidden",
+          "su": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ]
+        }
+      },
+      {
+        "name": "empty rule is public",
+        "rule": "",
+        "expect": {
+          "anon": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ],
+          "alice": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ],
+          "bob": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ],
+          "su": [
+            "d1",
+            "d2",
+            "d3",
+            "d4"
+          ]
+        }
+      }
+    ],
+    "write_rules": [
+      {
+        "name": "create needs auth: anon",
+        "op": "create",
+        "rule": "@request.auth.id != ''",
+        "as": "anon",
+        "body": {
+          "title": "n"
+        },
+        "expect": "forbidden"
+      },
+      {
+        "name": "create needs auth: user",
+        "op": "create",
+        "rule": "@request.auth.id != ''",
+        "as": "alice",
+        "body": {
+          "title": "n"
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "create null rule: user",
+        "op": "create",
+        "rule": null,
+        "as": "alice",
+        "body": {
+          "title": "n"
+        },
+        "expect": "forbidden"
+      },
+      {
+        "name": "create null rule: superuser",
+        "op": "create",
+        "rule": null,
+        "as": "su",
+        "body": {
+          "title": "n"
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "create body check rejects",
+        "op": "create",
+        "rule": "@request.body.public = false",
+        "as": "alice",
+        "body": {
+          "title": "n",
+          "public": true
+        },
+        "expect": "forbidden"
+      },
+      {
+        "name": "create body check accepts",
+        "op": "create",
+        "rule": "@request.body.public = false",
+        "as": "alice",
+        "body": {
+          "title": "n",
+          "public": false
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "create owner must be self: other",
+        "op": "create",
+        "rule": "@request.body.owner = @request.auth.id",
+        "as": "alice",
+        "body": {
+          "title": "n",
+          "owner": "$bob"
+        },
+        "expect": "forbidden"
+      },
+      {
+        "name": "create owner must be self: self",
+        "op": "create",
+        "rule": "@request.body.owner = @request.auth.id",
+        "as": "alice",
+        "body": {
+          "title": "n",
+          "owner": "$alice"
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "create :isset rejects field",
+        "op": "create",
+        "rule": "@request.body.status:isset = false",
+        "as": "alice",
+        "body": {
+          "title": "n",
+          "status": "live"
+        },
+        "expect": "forbidden"
+      },
+      {
+        "name": "create :isset allows omitted field",
+        "op": "create",
+        "rule": "@request.body.status:isset = false",
+        "as": "alice",
+        "body": {
+          "title": "n"
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "update own row",
+        "op": "update",
+        "record": "d1",
+        "rule": "owner = @request.auth.id",
+        "as": "alice",
+        "body": {
+          "title": "x"
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "update foreign row hides it",
+        "op": "update",
+        "record": "d3",
+        "rule": "owner = @request.auth.id",
+        "as": "alice",
+        "body": {
+          "title": "x"
+        },
+        "expect": "not_found"
+      },
+      {
+        "name": "update blocks owner change via :isset",
+        "op": "update",
+        "record": "d1",
+        "rule": "owner = @request.auth.id && @request.body.owner:isset = false",
+        "as": "alice",
+        "body": {
+          "owner": "$bob"
+        },
+        "expect": "not_found"
+      },
+      {
+        "name": "update :isset allows other fields",
+        "op": "update",
+        "record": "d1",
+        "rule": "owner = @request.auth.id && @request.body.owner:isset = false",
+        "as": "alice",
+        "body": {
+          "title": "x"
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "update :changed blocks real change",
+        "op": "update",
+        "record": "d1",
+        "rule": "@request.body.public:changed = false",
+        "as": "alice",
+        "body": {
+          "public": false
+        },
+        "expect": "not_found"
+      },
+      {
+        "name": "update :changed allows same value",
+        "op": "update",
+        "record": "d1",
+        "rule": "@request.body.public:changed = false",
+        "as": "alice",
+        "body": {
+          "public": true
+        },
+        "expect": "ok"
+      },
+      {
+        "name": "update compares body to stored row",
+        "op": "update",
+        "record": "d1",
+        "rule": "@request.body.status != 'live' || status = 'live'",
+        "as": "alice",
+        "body": {
+          "status": "live"
+        },
+        "expect": "not_found"
+      },
+      {
+        "name": "delete null rule: user",
+        "op": "delete",
+        "record": "d1",
+        "rule": null,
+        "as": "alice",
+        "expect": "forbidden"
+      },
+      {
+        "name": "delete own",
+        "op": "delete",
+        "record": "d1",
+        "rule": "owner = @request.auth.id",
+        "as": "alice",
+        "expect": "ok"
+      },
+      {
+        "name": "delete foreign",
+        "op": "delete",
+        "record": "d3",
+        "rule": "owner = @request.auth.id",
+        "as": "alice",
+        "expect": "not_found"
+      }
+    ]
+  }
+}

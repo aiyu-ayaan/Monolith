@@ -17,15 +17,22 @@ description: Write and review Monolith access rules and filters (PocketBase-comp
 
 - Works: `= != > >= < <= ~ !~`, any-of `?=` `?!=` `?>` `?>=` `?<` `?<=` `?~` `?!~`, `&&`, `||`,
   parentheses, `in (...)`, `:lower`, `:isset`, `:changed`, `@request.auth.id`,
-  `@request.auth.collectionName`, `@request.auth.<claim>`, `@request.body.<field>`, `@now`,
+  `@request.auth.collectionName`, `@request.auth.<claim>`, `@request.body.<field>`, `@now`, date and number macros
+  (`@yesterday` `@tomorrow` `@todayStart/End` `@monthStart/End` `@yearStart/End`, `@second` `@minute`
+  `@hour` `@day` `@month` `@weekday` `@year`; UTC, ends are `23:59:59.999`),
   single- and multi-relation paths up to 4 hops (`owner.org.plan = 'pro'`, `tags.name ?= 'rust'`,
   `tags = null` for empty check), `@collection.<name>(:<alias>)?.<path>` joins (up to 4 aliases,
   shared within `&&` scopes), `<coll>_via_<field>` back-relations (over single and multi relations),
   and `POST /api/v1/apps/{app}/rules:explain`.
-- Not yet: `:length`/`:each`, `@today` and friends, `@request.query.*`, `@request.key.*`.
+- Not yet: `:length`/`:each`, `~` with a field on the right side, `@request.query.*`, `@request.key.*`.
 - Types are checked when the collection is saved: `title = 1` or an unknown field is a 400.
   Dates compare with RFC 3339 strings; relations and ids compare with base32 id strings.
   `@request.auth.id != ""` means "signed in".
 - `=`/`!=` are NULL-safe (`IS`/`IS NOT`). `<`, `>`, `~` on NULL are false.
-- `~` is a case-insensitive (ASCII) substring match; `%` and `_` in the value are literal.
+- On text, `''` and NULL are the same value (PocketBase): `note = ''` and `note = null` match both,
+  `note != null` matches neither.
+- `~` is a case-insensitive (ASCII) match. Without `%` in the value it means "contains" and `_` is
+  literal. With an unescaped `%` the value is the LIKE pattern as written (`'a%'` = starts with a,
+  `_` = one char). `\%` is a literal percent.
+- Conformance: `api/conformance/vectors/rules.json` (ported from PocketBase).
 - Client `filter` cannot reference `hidden` fields; rules can.

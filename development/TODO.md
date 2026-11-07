@@ -102,7 +102,9 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
       `Accept-Encoding`, serves embedded bytes zero-copy (JS 98 KB raw → 29 KB br)
 - [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md,
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
-- [ ] Phase 1 exit: M1–M6 gates, ported PocketBase rules vectors
+- [x] Ported PocketBase rules vectors (`api/conformance/vectors/rules.json`, run by `crates/monolith-core/tests/rules_vectors.rs`);
+      fixed `''`≡NULL on text, `%` wildcards in `~`, added date/number macros; `known_gaps`: `:length`/`:each`, `~` with a field on the right
+- [ ] Phase 1 exit: M1–M6 gates (need owner OK to run benchmarks)
 
 ## Later phases (see `docs/20-roadmap.md`)
 

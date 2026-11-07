@@ -18,10 +18,16 @@ identifier:= field ( "." field )* modifier?
            | "@request.auth." path | "@request.body." path | "@request.query." name
            | "@request.headers." name | "@request.method" | "@request.context"
            | "@collection." name (":" alias)? "." path
-           | "@now" | "@today" | "@yesterday" | "@month" | "@year"   (and Start/End variants)
+           | "@now" | "@yesterday" | "@tomorrow" | "@todayStart" | "@todayEnd"
+           | "@monthStart" | "@monthEnd" | "@yearStart" | "@yearEnd"      (dates, UTC)
+           | "@second" | "@minute" | "@hour" | "@day" | "@month" | "@weekday" | "@year"  (numbers)
 modifier  := ":isset" | ":changed" | ":length" | ":each" | ":lower"
 func_call := "geoDistance(" lonA "," latA "," lonB "," latB ")" | "strftime(" fmt "," v ")"
 ```
+
+Text semantics follow PocketBase: `''` and NULL are one value for `=`/`!=`, and `~` wraps the
+value in `%…%` (with `_` literal) unless it contains an unescaped `%`, in which case it is the
+LIKE pattern as written. Vectors: `api/conformance/vectors/rules.json`.
 
 Rule values: `null` = superusers only, `""` = public, expression otherwise.
 
