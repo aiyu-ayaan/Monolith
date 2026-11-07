@@ -1,7 +1,7 @@
 // Thin fetch client for the Phase 1 API (api/openapi/monolith.v1.yaml).
 // shortcut: hand-written; switch to the generated @monolith/client once the SDK lands.
 
-import { createSignal } from "solid-js";
+import { createResource, createRoot, createSignal } from "solid-js";
 
 const TOKEN_KEY = "monolith.token";
 
@@ -289,3 +289,14 @@ export interface Backup {
   created: string;
   files?: boolean;
 }
+
+// ---------- console users (GET /api/v1/system/me, /api/v1/system/superusers) ----------
+
+export interface Superuser {
+  id: string;
+  email: string;
+  created: string;
+}
+
+/** The signed-in superuser; refetched whenever the token changes. */
+export const [me] = createRoot(() => createResource(token, () => api<Superuser>("GET", "/api/v1/system/me")));

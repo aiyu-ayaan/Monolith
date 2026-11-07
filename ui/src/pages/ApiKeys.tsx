@@ -12,7 +12,8 @@ const PRESETS: { id: string; label: string; help: string; scopes: string }[] = [
 ];
 
 /** API keys of one app: create (secret shown once), list, revoke. */
-export default function ApiKeys() {
+/** `embedded`: shown inside Project settings, without the page title. */
+export default function ApiKeys(p: { embedded?: boolean }) {
   const params = useParams();
   const base = () => `/api/v1/apps/${enc(params.app!)}/api-keys`;
   const [list, { refetch }] = createResource(base, (b) => api<{ items: ApiKey[] }>("GET", b));
@@ -108,13 +109,15 @@ export default function ApiKeys() {
   };
 
   return (
-    <div class="page">
-      <header class="page-head">
+    <div classList={{ page: !p.embedded, stack: p.embedded }}>
+      <header class="page-head" classList={{ "sub-head": p.embedded }}>
         <div class="min0">
-          <p class="crumbs">
-            <a href={`#/apps/${enc(params.app!)}`}>{params.app}</a>
-          </p>
-          <h1>API keys</h1>
+          <Show when={!p.embedded}>
+            <p class="crumbs">
+              <a href={`#/apps/${enc(params.app!)}`}>{params.app}</a>
+            </p>
+            <h1>API keys</h1>
+          </Show>
           <p class="muted">Credentials for servers and scripts. Send as <code>Authorization: Bearer mk_…</code>. A key works only on this app.</p>
         </div>
         <button class="btn" onClick={open}>

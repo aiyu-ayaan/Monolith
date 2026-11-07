@@ -1,7 +1,7 @@
 import { render } from "solid-js/web";
-import { HashRouter, Navigate, Route, useLocation, type RouteSectionProps } from "@solidjs/router";
+import { HashRouter, Navigate, Route, useLocation, useParams, type RouteSectionProps } from "@solidjs/router";
 import { Show } from "solid-js";
-import { setToken, token } from "./api";
+import { token } from "./api";
 import { Icon, Toasts } from "./ui";
 import Login from "./pages/Login";
 import Install from "./pages/Install";
@@ -14,13 +14,15 @@ import Logs from "./pages/Logs";
 import Rules from "./pages/Rules";
 import Realtime from "./pages/Realtime";
 import Backups from "./pages/Backups";
-import ApiKeys from "./pages/ApiKeys";
 import Storage from "./pages/Storage";
+import Settings from "./pages/Settings";
+import UserMenu from "./pages/UserMenu";
 import "./styles.css";
 
 function Shell(props: RouteSectionProps) {
   const loc = useLocation();
   const isAnalytics = () => loc.pathname === "/analytics";
+  const isSettings = () => loc.pathname.startsWith("/settings");
   // Inside a project the console shows only that project's navigation (Firebase-style).
   const inApp = () => loc.pathname.startsWith("/apps/");
   return (
@@ -31,16 +33,17 @@ function Shell(props: RouteSectionProps) {
           <a href="#/" class="logo" aria-label="Monolith home">
             <Icon name="logo" size={22} />
           </a>
-          <a href="#/" class="rail-btn" classList={{ active: !isAnalytics() }} aria-label="Dashboard" title="Dashboard">
+          <a href="#/" class="rail-btn" classList={{ active: !isAnalytics() && !isSettings() }} aria-label="Dashboard" title="Dashboard">
             <Icon name="layers" />
           </a>
           <a href="#/analytics" class="rail-btn" classList={{ active: isAnalytics() }} aria-label="Analytics" title="Analytics">
             <Icon name="chart" />
           </a>
           <span class="grow" />
-          <button class="rail-btn" aria-label="Sign out" title="Sign out" onClick={() => setToken(null)}>
-            <Icon name="logout" />
-          </button>
+          <a href="#/settings" class="rail-btn" classList={{ active: isSettings() }} aria-label="Console settings" title="Console settings">
+            <Icon name="gear" />
+          </a>
+          <UserMenu compact settingsHref="#/settings/users" />
         </nav>
         </Show>
         <main class="shell-main">{props.children}</main>
@@ -58,6 +61,7 @@ render(
         <Route path="/" component={Shell}>
           <Route path="/" component={Apps} />
           <Route path="/analytics" component={SystemAnalytics} />
+          <Route path="/settings/:tab?" component={Settings} />
           <Route path="/apps/:app" component={AppLayout}>
             <Route path="/" component={AppHome} />
             <Route path="/analytics" component={AppAnalytics} />
@@ -66,8 +70,9 @@ render(
             <Route path="/rules" component={Rules} />
             <Route path="/realtime" component={Realtime} />
             <Route path="/backups" component={Backups} />
-            <Route path="/keys" component={ApiKeys} />
+            <Route path="/keys" component={() => <Navigate href={`/apps/${encodeURIComponent(useParams().app!)}/settings/keys`} />} />
             <Route path="/storage" component={Storage} />
+            <Route path="/settings/:tab?" component={Settings} />
             <Route path="/c/:coll" component={Records} />
           </Route>
         </Route>

@@ -109,6 +109,8 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Backups v1 (manual snapshot, list, download, delete, restore into a new app); see `docs/09` "Implemented today"
 - [x] Admin UI: Logs, Access rules, Realtime monitor and Backups pages (sidebar items that stay 'Soon': Offline sync, Webhooks, Plugins)
 - [x] API keys v1: per-app, hashed, scoped, in-memory verification; Admin UI page (`docs/08 §7`)
+- [x] Admin UI navigation rework + settings (`docs/15 §5`): grouped sidebar without duplicate entries, collections tree,
+      user menu in the footer, Project settings (General, API keys, Users and permissions), Console settings at `#/settings`
 - [x] Storage buckets v1: private/public buckets, streamed upload, Range/ETag download, listing; Admin UI page (`docs/13 §6`)
 - [x] API key hardening: last-used, per-key rate limit (GCRA), IP/CIDR allowlist, key update, `NO_CHANGE_LOG` writes
 - [ ] API keys follow-ups: `@request.key.*` in rules, publishable keys, rate limit for failed auth, remaining scopes (`users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp`), `monolith keys` CLI
@@ -196,7 +198,8 @@ Rules engine
 
 Admin UI
 - Sidebar entries marked "Soon" do not link anywhere. The UI is not covered by automated tests; only typecheck and manual checks.
-- No keyboard focus trap in drawers; no sidebar collapse; no Settings page.
+- No keyboard focus trap in drawers; no sidebar collapse. Settings has no change-password and no per-project roles
+  (Project admin / Viewer are shown as planned).
 
 Testing and performance
 - None of the new code is benchmarked. Phase 1 gates M1–M6 and the Phase 0 bake-off are still pending the owner's OK to run on the host.

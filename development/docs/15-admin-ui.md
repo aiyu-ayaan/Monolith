@@ -70,3 +70,19 @@ build: `pnpm --filter @monolith/ui build` (or `pnpm build` across workspace).
 12. Backups: list, run, restore (to new app or in place), policies
 13. Webhooks, cron, plugins
 14. System: metrics, superusers, global settings
+
+### Navigation and settings (built)
+
+- Project sidebar: brand, project switcher (back to all projects), search, then **Project overview**
+  and four fixed groups, each product listed once: Build (Database with its collections as a tree,
+  Storage, Authentication, Access rules), Realtime & sync, Monitor (Analytics, Logs, Backups),
+  Extend. Unbuilt items show a "Soon" tag and do not link.
+- Sidebar footer: **Project settings** and the signed-in user (avatar, email, role) with a menu:
+  Users and permissions, Sign out. The server-level rail has the same user menu and a settings icon.
+- **Project settings** (`#/apps/{app}/settings/{tab}`), Firebase-style tabs: General (project ID,
+  created, data directory, REST and realtime URLs, delete project), API keys (moved out of the
+  sidebar; `#/apps/{app}/keys` redirects here), Users and permissions.
+- **Console settings** (`#/settings`): Users and permissions only, since superusers span all projects.
+- Users and permissions: list, add (email + initial password), remove (not yourself, not the last
+  one) via `/api/v1/system/superusers`; a roles table shows Superuser as the only active role.
+  Project admin and Viewer roles are planned (doc 08 §1) and need role claims in the token.
