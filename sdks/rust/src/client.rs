@@ -9,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::auth::AuthService;
+use crate::auth::{AuthCore, AuthService, SessionStore};
 use crate::collections::{Collection, Record};
 use crate::errors::{Error, Problem, Result};
 use crate::files::{FilesService, ObjectInfo};
@@ -78,6 +78,7 @@ struct ClientInner {
     sse_http: reqwest::Client,
     realtime_backoff: (Duration, Duration),
     token: RwLock<Option<String>>,
+    pub(crate) auth: AuthCore,
     api_key: RwLock<Option<String>>,
     custom_headers: HeaderMap,
 }
@@ -91,6 +92,7 @@ pub struct ClientBuilder {
     custom_headers: HeaderMap,
     timeout: Option<Duration>,
     realtime_backoff: (Duration, Duration),
+    session_store: Option<Arc<dyn SessionStore>>,
 }
 
 impl ClientBuilder {
@@ -103,6 +105,7 @@ impl ClientBuilder {
             custom_headers: HeaderMap::new(),
             timeout: None,
             realtime_backoff: (Duration::from_millis(500), Duration::from_secs(15)),
+            session_store: None,
         }
     }
 
@@ -147,6 +150,18 @@ impl ClientBuilder {
         self
     }
 
+    /// Where the app-user session is kept between runs (default: memory). A stored session is
+    /// restored by [`build`](Self::build) and refreshed automatically.
+    pub fn session_store(mut self, store: impl SessionStore + 'static) -> Self {
+        self.session_store = Some(Arc::new(store));
+        self
+    }
+
+    /// Shortcut for [`session_store`](Self::session_store) with a [`FileSessionStore`](crate::FileSessionStore).
+    pub fn session_file(self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.session_store(crate::auth::FileSessionStore::new(path))
+    }
+
     pub fn build(self) -> Result<Client> {
         let mut raw_url = self.base_url.trim().to_string();
         if !raw_url.ends_with('/') {
@@ -163,13 +178,20 @@ impl ClientBuilder {
             .connect_timeout(self.timeout.unwrap_or(Duration::from_secs(10)))
             .build()?;
 
+        let auth = AuthCore::new(
+            self.session_store
+                .unwrap_or_else(|| Arc::new(crate::auth::MemorySessionStore::default())),
+        );
+        let restored = auth.session().map(|s| s.token);
+
         let inner = ClientInner {
             base_url: parsed_url,
             app: self.app,
             http,
             sse_http,
             realtime_backoff: self.realtime_backoff,
-            token: RwLock::new(self.token),
+            token: RwLock::new(restored.or(self.token)),
+            auth,
             api_key: RwLock::new(self.api_key),
             custom_headers: self.custom_headers,
         };
@@ -216,11 +238,21 @@ impl Client {
             .and_then(|t| t.as_ref().cloned())
     }
 
-    /// Sets or clears the active session token.
+    /// Sets or clears the bearer token by hand (superuser tokens, tests). Drops any app-user
+    /// session held in memory so a refresh never overwrites this token; the session store is untouched.
     pub fn set_token(&self, token: Option<impl Into<String>>) {
+        self.inner.auth.forget();
+        self.set_bearer(token.map(Into::into));
+    }
+
+    pub(crate) fn set_bearer(&self, token: Option<String>) {
         if let Ok(mut lock) = self.inner.token.write() {
-            *lock = token.map(Into::into);
+            *lock = token;
         }
+    }
+
+    pub(crate) fn auth_core(&self) -> &AuthCore {
+        &self.inner.auth
     }
 
     /// Returns the configured API key if set.
@@ -292,6 +324,7 @@ impl Client {
 
     /// Opens an SSE response (`GET url`, `Accept: text/event-stream`) without a total timeout.
     pub(crate) async fn open_sse(&self, url: Url) -> Result<reqwest::Response> {
+        self.ensure_fresh().await?;
         let mut req = reqwest::Request::new(Method::GET, url);
         req.headers_mut()
             .insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
@@ -326,16 +359,39 @@ impl Client {
         }
     }
 
+    /// Single exit for every request. With `hooks`, an app-user session is refreshed first when its
+    /// access token is about to expire, and the request is retried once after a `401` (single-flight).
+    async fn send(&self, mut req: reqwest::Request, hooks: bool) -> Result<reqwest::Response> {
+        let explicit_auth = req.headers().contains_key(AUTHORIZATION)
+            || self.inner.custom_headers.contains_key(AUTHORIZATION);
+        let hooks = hooks && !explicit_auth;
+        if hooks {
+            // Boxed: ensure_fresh -> refresh call -> send is a cycle.
+            Box::pin(self.ensure_fresh()).await?;
+        }
+        let retry = if hooks { req.try_clone() } else { None };
+        let used = if hooks { self.token() } else { None };
+        self.apply_headers(&mut req);
+        let res = self.inner.http.execute(req).await?;
+        if res.status() == StatusCode::UNAUTHORIZED
+            && let (Some(mut again), Some(used)) = (retry, used)
+            && Box::pin(self.refresh_after_unauthorized(&used)).await
+        {
+            self.apply_headers(&mut again);
+            return Ok(self.inner.http.execute(again).await?);
+        }
+        Ok(res)
+    }
+
     async fn execute_get(&self, url: Url) -> Result<reqwest::Response> {
         let max_attempts = 4;
 
         for attempt in 0..max_attempts {
-            let mut req = reqwest::Request::new(Method::GET, url.clone());
-            self.apply_headers(&mut req);
+            let req = reqwest::Request::new(Method::GET, url.clone());
 
-            let res = match self.inner.http.execute(req).await {
+            let res = match self.send(req, true).await {
                 Ok(r) => r,
-                Err(e) => {
+                Err(Error::Network(e)) => {
                     if attempt < max_attempts - 1 {
                         let delay = Duration::from_millis(100 * (1 << attempt));
                         tokio::time::sleep(delay).await;
@@ -343,6 +399,7 @@ impl Client {
                     }
                     return Err(Error::Network(e));
                 }
+                Err(e) => return Err(e),
             };
 
             let status = res.status();
@@ -383,16 +440,22 @@ impl Client {
         Ok(data)
     }
 
-    pub async fn post<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
+    /// JSON body request. `hooks` off is for the auth calls themselves (login, refresh, ...).
+    pub(crate) async fn json_request<B: Serialize, T: DeserializeOwned>(
+        &self,
+        method: Method,
+        path: &str,
+        body: &B,
+        hooks: bool,
+    ) -> Result<T> {
         let url = self.build_url(path, None)?;
         let bytes = serde_json::to_vec(body)?;
-        let mut req = reqwest::Request::new(Method::POST, url);
+        let mut req = reqwest::Request::new(method, url);
         req.headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        self.apply_headers(&mut req);
         *req.body_mut() = Some(reqwest::Body::from(bytes));
 
-        let res = self.inner.http.execute(req).await?;
+        let res = self.send(req, hooks).await?;
         let status = res.status();
         if !status.is_success() {
             return self.handle_error_response(res).await;
@@ -404,25 +467,12 @@ impl Client {
         Ok(data)
     }
 
-    pub async fn put<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
-        let url = self.build_url(path, None)?;
-        let bytes = serde_json::to_vec(body)?;
-        let mut req = reqwest::Request::new(Method::PUT, url);
-        req.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        self.apply_headers(&mut req);
-        *req.body_mut() = Some(reqwest::Body::from(bytes));
+    pub async fn post<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
+        self.json_request(Method::POST, path, body, true).await
+    }
 
-        let res = self.inner.http.execute(req).await?;
-        let status = res.status();
-        if !status.is_success() {
-            return self.handle_error_response(res).await;
-        }
-        if status == StatusCode::NO_CONTENT {
-            return serde_json::from_str("null").map_err(Error::Serialization);
-        }
-        let data = res.json::<T>().await?;
-        Ok(data)
+    pub async fn put<B: Serialize, T: DeserializeOwned>(&self, path: &str, body: &B) -> Result<T> {
+        self.json_request(Method::PUT, path, body, true).await
     }
 
     pub async fn patch<B: Serialize, T: DeserializeOwned>(
@@ -430,31 +480,13 @@ impl Client {
         path: &str,
         body: &B,
     ) -> Result<T> {
-        let url = self.build_url(path, None)?;
-        let bytes = serde_json::to_vec(body)?;
-        let mut req = reqwest::Request::new(Method::PATCH, url);
-        req.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        self.apply_headers(&mut req);
-        *req.body_mut() = Some(reqwest::Body::from(bytes));
-
-        let res = self.inner.http.execute(req).await?;
-        let status = res.status();
-        if !status.is_success() {
-            return self.handle_error_response(res).await;
-        }
-        if status == StatusCode::NO_CONTENT {
-            return serde_json::from_str("null").map_err(Error::Serialization);
-        }
-        let data = res.json::<T>().await?;
-        Ok(data)
+        self.json_request(Method::PATCH, path, body, true).await
     }
 
     pub async fn delete(&self, path: &str) -> Result<()> {
         let url = self.build_url(path, None)?;
-        let mut req = reqwest::Request::new(Method::DELETE, url);
-        self.apply_headers(&mut req);
-        let res = self.inner.http.execute(req).await?;
+        let req = reqwest::Request::new(Method::DELETE, url);
+        let res = self.send(req, true).await?;
         if !res.status().is_success() {
             return self.handle_error_response(res).await;
         }
@@ -473,10 +505,9 @@ impl Client {
         if let Ok(val) = HeaderValue::from_str(mime) {
             req.headers_mut().insert(CONTENT_TYPE, val);
         }
-        self.apply_headers(&mut req);
         *req.body_mut() = Some(reqwest::Body::from(data));
 
-        let res = self.inner.http.execute(req).await?;
+        let res = self.send(req, true).await?;
         if !res.status().is_success() {
             return self.handle_error_response(res).await;
         }
