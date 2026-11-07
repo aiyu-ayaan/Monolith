@@ -82,3 +82,14 @@ Tables, lists, inline code, bold and links are standard Markdown. Internal links
 
 Reference pages are exact and dry: parameter tables (name, type, default, meaning), response shapes, error codes, limits.
 Link each reference page from the guide that introduces the feature, and link back.
+
+## Conventions added later
+
+- **SDK pages are per topic, not per language.** `content/sdks/<topic>.md` (setup, auth, query, write, realtime, storage, analytics, errors)
+  shows the same task in every language with `:::tabs`. Put prose once; put differences in a short note or table. Platform-only material
+  (Android manifest, Flutter widgets) goes in a platform guide (`sdks/kotlin.md`, `sdks/dart-flutter.md`, ...), group "Platform guides".
+- **Anchors:** `## Title {#custom-id}` sets the heading id by hand.
+- **Drafts:** a file whose name starts with `_` is not published and not shown in the sidebar.
+- **Sidebar:** every page in `get-started`, `build` and `reference` needs a `group`; groups collapse, the one with the current page is open.
+- **Landing page:** `src/components/Home.tsx`. Screenshots live in `public/screens/` and show the admin console of a seeded demo app.
+- **Honesty:** if an SDK method is broken or missing, say so on the page (`:::status partial`) and list the fix in `development/TODO.md`.

@@ -52,6 +52,34 @@ Source of truth for design: `docs/README.md`. Phases: `docs/20-roadmap.md`.
 Phase 0 still open: benchmark runs (owner approval needed before running on the host),
 Postgres prototype, PocketBase baseline, DuckDB A1–A3, Turso check, Docker image.
 
+## Handover — where work stopped (2026-11-08)
+
+Done in the last session (all committed on `master`):
+- [x] Admin UI: removed the `max-width` cap on `.page`, so every page uses the full content width (`ui/src/styles.css`)
+- [x] Docs site (`docs-site/`): collapsible sidebar groups; Get started and Reference grouped; `## Title {#id}` anchors; files starting
+      with `_` are ignored (drafts); landing page with console screenshots (`docs-site/public/screens/*.png`), feature grid, SDK code tabs
+- [x] SDK docs restructured: one page per topic with language tabs under `docs-site/content/sdks/` (setup, auth, query, write, realtime,
+      storage, analytics, errors) plus "Platform guides" (typescript, kotlin, dart-flutter, python, rust)
+- [x] `agent-skills/`: SDK skills refreshed for `Monolith.init`; new `monolith-sdk-dart|python|rust`
+
+Start here tomorrow (suggested order):
+1. Look at the docs site in a browser: landing page in light mode and at phone width (only dark desktop was checked), sidebar groups, tab choice persistence.
+2. Fix the SDK gaps found while writing the docs (each is stated on the docs pages, remove the note when fixed):
+   - [ ] TypeScript: `list()` cursor is `next` on the wire but typed `nextCursor`; `count()` and `batch()` do not match the server
+   - [ ] `batch` has no real-server test in any SDK; Rust sends `{op, collection}` where the others send `{method, path}`
+   - [ ] Expose `If-Match` and `dry_run` on collection `update`/`replace`/`delete` in the SDKs
+   - [ ] `files.getURL` adds no credential (private buckets need a header or a signed URL); Kotlin does not escape object keys
+   - [ ] Analytics service for Dart and Rust
+3. Docs accuracy: older pages (quickstarts, storage, auth guides) were only name-checked against the SDK source, not re-read against the server. Compile or run
+   the Dart and Rust samples (never compiled), and the Flutter package (`sdks/flutter`, no Flutter toolchain here).
+4. Docs content still thin: SDK pages Set up, Analytics, Errors; no SDK page for webhooks, plugins or API keys.
+5. Make the console screenshots repeatable: the capture script was a throwaway (headless Chrome + CDP against a seeded demo app). Turn it into
+   `tools/docs-screens.mjs` plus a root `pnpm` script, and re-capture when the console changes.
+6. Agent skills: `monolith-rest` and `monolith-sync` unchanged; `tools/agent-pack` generator and `monolith agent-init` are still not built.
+
+Housekeeping: a demo server (port 18090), a docs preview (port 5180) and a headless Chrome may still be running from the last session; stop them.
+`pnpm build:docs` and `pnpm typecheck:docs` must pass before committing docs changes.
+
 ## In progress — Phase 1 (core data plane)
 
 Order of work: rules → contract → store tweaks → auth → core → server → admin UI (all landed).
