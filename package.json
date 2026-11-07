@@ -29,6 +29,7 @@
     "rust:bench": "cargo bench --workspace",
     "rust:bench:build": "cargo bench --workspace --no-run",
     "rust:deny": "cargo deny check",
+    "bench:load": "python3 bench/scenarios/load.py",
     "bench:engine": "cargo run --release -p monolith-bench --",
     "clean": "pnpm -r --parallel exec rm -rf dist node_modules"
   }

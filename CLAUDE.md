@@ -120,6 +120,7 @@ pnpm rust:test                        # cargo test --workspace
 pnpm rust:lint | rust:fmt             # fmt check + clippy | format
 pnpm rust:bench:build                 # compile benches only
 pnpm rust:bench                       # run benches (ask the owner before running on the host)
+pnpm bench:load                       # HTTP load run with oha (M1-M5); writes bench/results/<stamp>/ (ask the owner before running on the host)
 pnpm bench:engine                     # engine bake-off harness (ask the owner before running on the host)
 pnpm rust:deny                        # cargo-deny (needs `cargo install cargo-deny`)
 pnpm clean                            # remove dist and node_modules in all JS/TS packages

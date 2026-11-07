@@ -1,0 +1,40 @@
+15:07:18 server up pid 271112
+15:07:32 seeded 1000000 rows in 13.8s = 72702 rows/s (batch 500, authed superuser)
+15:07:32 == H0 health (floor)  c=64
+15:07:58    rep1: 123379 units/s  p50 0.45 p99 2.02 max 11.0 ms  cpu 336%  rss 54MB  codes {'200': 2468554}
+15:08:19    rep2: 116795 units/s  p50 0.46 p99 2.27 max 11.1 ms  cpu 321%  rss 165MB  codes {'200': 2336797}
+15:08:40    rep3: 118432 units/s  p50 0.46 p99 2.18 max 18.0 ms  cpu 331%  rss 165MB  codes {'200': 2369642}
+15:08:40 == M1 view by id, public  c=64
+15:09:06    rep1: 65646 units/s  p50 0.90 p99 2.44 max 12.1 ms  cpu 338%  rss 169MB  codes {'200': 1313254}
+15:09:26    rep2: 65820 units/s  p50 0.90 p99 2.42 max 9.8 ms  cpu 342%  rss 169MB  codes {'200': 1316600}
+15:09:47    rep3: 64193 units/s  p50 0.92 p99 2.49 max 10.6 ms  cpu 337%  rss 169MB  codes {'200': 1284082}
+15:09:47 == M2* view, row rule status='open'  c=64
+15:10:12    rep1: 62863 units/s  p50 0.94 p99 2.57 max 11.2 ms  cpu 336%  rss 170MB  codes {'200': 1257513}
+15:10:33    rep2: 64201 units/s  p50 0.93 p99 2.42 max 11.0 ms  cpu 342%  rss 170MB  codes {'200': 1284184}
+15:10:53    rep3: 63465 units/s  p50 0.94 p99 2.52 max 15.1 ms  cpu 338%  rss 170MB  codes {'200': 1269559}
+15:10:53 == M3 list keyset limit=50  c=64
+15:11:18    rep1: 15967 units/s  p50 3.86 p99 8.01 max 27.6 ms  cpu 374%  rss 173MB  codes {'200': 319342}
+15:11:39    rep2: 16399 units/s  p50 3.79 p99 7.34 max 14.7 ms  cpu 378%  rss 173MB  codes {'200': 327983}
+15:11:59    rep3: 16300 units/s  p50 3.79 p99 7.63 max 25.2 ms  cpu 374%  rss 174MB  codes {'200': 326003}
+15:11:59 == M3b list limit=50 filter n>50000  c=64
+15:12:24    rep1: 1541 units/s  p50 40.86 p99 59.65 max 81.8 ms  cpu 399%  rss 224MB  codes {'200': 30753}
+15:12:44    rep2: 1568 units/s  p50 40.61 p99 49.95 max 65.8 ms  cpu 399%  rss 224MB  codes {'200': 31294}
+15:13:04    rep3: 1562 units/s  p50 40.78 p99 50.03 max 64.9 ms  cpu 400%  rss 224MB  codes {'200': 31190}
+15:13:04 == M4 create single (c=64)  c=64
+15:13:29    rep1: 13301 units/s  p50 1.14 p99 3.14 max 1106.2 ms  cpu 76%  rss 224MB  codes {'201': 266001}
+15:13:49    rep2: 44977 units/s  p50 1.22 p99 3.57 max 59.8 ms  cpu 273%  rss 224MB  codes {'201': 899574}
+15:14:10    rep3: 43401 units/s  p50 1.26 p99 3.61 max 81.3 ms  cpu 270%  rss 224MB  codes {'201': 868103}
+15:14:10 == M4b create single (c=256)  c=256
+15:14:35    rep1: 49632 units/s  p50 4.87 p99 10.51 max 66.4 ms  cpu 326%  rss 233MB  codes {'201': 992614}
+15:14:56    rep2: 47985 units/s  p50 4.96 p99 12.45 max 66.2 ms  cpu 320%  rss 233MB  codes {'201': 959615}
+15:15:16    rep3: 47331 units/s  p50 4.94 p99 16.39 max 58.0 ms  cpu 314%  rss 234MB  codes {'201': 946685}
+15:15:16 == M5 batch 100 creates (c=16)  c=16
+15:15:41    rep1: 103258 units/s  p50 14.89 p99 45.13 max 85.6 ms  cpu 140%  rss 234MB  codes {'200': 20637}
+15:16:01    rep2: 102724 units/s  p50 14.91 p99 45.41 max 81.4 ms  cpu 140%  rss 234MB  codes {'200': 20531}
+15:16:21    rep3: 102078 units/s  p50 14.98 p99 45.28 max 82.4 ms  cpu 140%  rss 234MB  codes {'200': 20401}
+15:16:21 == M1 open-loop @ 32823 qps (50% of max)
+15:16:46    rep1: 32820 rps p50 0.41 p99 1.25 p99.9 2.33 max 26.8 ms
+15:17:07    rep2: 32642 rps p50 0.41 p99 2.59 p99.9 5.93 max 31.3 ms
+15:17:27    rep3: 32819 rps p50 0.41 p99 1.38 p99.9 2.81 max 31.9 ms
+15:17:27 sink rows after run: {'exact': True, 'total': 11911850}
+15:17:27 final {'rss_mb': 1997.6875, 'data_mb': 1559.088448}
