@@ -1,31 +1,100 @@
 # Monolith Client SDKs
 
-Official client libraries for integrating applications with Monolith. Each SDK provides a consistent API structure across languages for data access, authentication, storage, realtime streams, and analytics.
-
-## Core Features Provided by SDKs
-
-| Feature | Capabilities |
-|---|---|
-| **Database & Collections** | Typed CRUD (`list`, `getOne`, `create`, `update`, `replace`, `delete`), record counts, keyset pagination, sorting, filtering expressions, field projection, relation expansion (`expand`), and atomic multi-operation `batch`. |
-| **Authentication** | Email & password login, first-superuser installer bootstrap, token management, session change listeners (`onChange`), and scoped API key support. |
-| **Storage & Files** | Bucket management, direct/streamed file uploads, download URL generation with on-demand thumbnail parameters (`?thumb=WxH`), and object deletion. |
-| **Realtime** | Multiplexed Server-Sent Events (SSE) connection over `/api/v1/apps/{app}/realtime`, per-collection subscriptions, and automatic exponential backoff reconnection. |
-| **Analytics** | Buffered in-memory event tracking (`track`), auto-flushing by batch size and time intervals, and retry resilience. |
-| **Error Handling** | Native exception mapping for RFC 9457 `application/problem+json` error responses with HTTP status, problem type, request ID, and granular field-level validation errors. |
-| **Offline Sync** | Local replica cache, change outbox, background synchronization, and conflict resolution policies *(planned for Phase 3)*. |
+Official native client libraries for integrating applications with Monolith. Each SDK follows a shared architecture and consistent module layout across platforms.
 
 ---
 
-## SDK Catalog & Language Support
+## SDK Feature Checklist & Support Matrix
 
-| SDK | Package / Registry | Platforms | Database & Auth | Storage & Realtime | Status |
-|---|---|---|:---:|:---:|---|
-| **TypeScript** | npm: `@monolith/client` | Web browsers, Node >= 20, Bun, Deno, React Native | Yes | Yes | **v0 implemented** |
-| **Dart** | pub.dev: `monolith_client` | Flutter (Android, iOS, desktop, web) | Yes | Yes | **v0 implemented** |
-| **Python** | PyPI: `monolith-client` | Python >= 3.10 (httpx), backend scripts, jobs | Yes | Yes | **v0 implemented** |
-| **Kotlin / Android** | Maven: `dev.monolith:monolith-core`, `monolith-android` | Android (AAR), JVM, Kotlin Multiplatform | Yes | Yes | **v0 implemented** |
-| **Rust** | crates.io: `monolith-client` | Rust CLI tools, background workers, microservices | Yes | Yes | **v0 implemented** |
-| **Swift** | SwiftPM: `Monolith` | iOS, macOS, watchOS, visionOS | Planned | Planned | Phase 5 |
+Detailed breakdown of capabilities implemented across the official client SDKs:
+
+| Category | Capability | TypeScript | Kotlin / Android | Dart / Flutter | Python | Rust | Swift |
+|---|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Database** | Keyset list (`list()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Record lookup (`getOne()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Create record (`create()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Partial update (`update()` PATCH) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Full replace (`replace()` PUT) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Delete record (`delete()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Record count (`count()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Expression filters (`filter`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Sort order (`sort`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Field projection (`fields`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Relation joins (`expand`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Atomic batch (`batch()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| **Auth** | Password login (`signInWithPassword`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Installer link bootstrap (`install`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Session sign-out (`signOut()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Reactive listener (`onChange`) | [x] | [x] (Flow) | [x] (Stream) | [x] | [x] | [ ] |
+| | Secure token persistence | Web Storage | EncryptedSharedPrefs | In-memory | In-memory | In-memory | [ ] |
+| | Scoped API key auth | [x] | [x] | [x] | [x] | [x] | [ ] |
+| **Storage** | Object upload (`upload()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Download URL (`getURL()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | On-demand thumbnails (`?thumb=WxH`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Object deletion (`delete()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Bucket object listing (`list()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| **Realtime** | Multiplexed SSE connection | [x] | [x] | [x] | Planned | Planned | [ ] |
+| | Per-collection subscription (`subscribe()`) | [x] | [x] | [x] | Planned | Planned | [ ] |
+| | Reconnection with exponential backoff & jitter | [x] | [x] | [x] | Planned | Planned | [ ] |
+| | Automatic connection lifecycle (ref-counted) | [x] | [x] | [x] | Planned | Planned | [ ] |
+| **Analytics** | Event tracking (`track()`) | [x] | [x] | [x] | [x] | Planned | [ ] |
+| | In-memory queue buffering | [x] | [x] | [x] | [x] | Planned | [ ] |
+| | Periodic interval flush | [x] | [x] | [x] | [x] | Planned | [ ] |
+| | Size threshold flush | [x] | [x] | [x] | [x] | Planned | [ ] |
+| **Errors** | RFC 9457 `problem+json` error mapping | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Field-level validation problems | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Request ID extraction (`X-Request-Id`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Idempotent GET retry on network/503 | [x] | [x] | [x] | [x] | [x] | [ ] |
+| **Offline** | Local replica caching & sync | Phase 3 | Phase 3 | Phase 3 | Phase 3 | Phase 3 | Phase 5 |
+
+---
+
+## Detailed Feature Specifications
+
+### 1. Database & Collections
+- **Typed CRUD Operations**: Full mapping to REST records endpoints (`/api/v1/apps/{app}/collections/{collection}/records`).
+- **Keyset Cursor Pagination**: Transparent forward and backward paging using Crockford base32 cursor tokens without expensive `COUNT(*)` overhead.
+- **Rule-Guarded Mutations**: Safe partial mutations via `PATCH`, upserts via `PUT`, and savepoint-backed dry runs via `?dry_run=true`.
+- **Query Parameters**: Declarative sorting (`-created`), filtering syntax compatible with PocketBase rules (`status = 'active' && views >= 10`), relation expansion (`author,category`), and column projection (`fields=id,title`).
+- **Atomic Batch Ingestion**: Group multiple record mutations (create, update, delete) in a single HTTP `POST .../batch` request inside an isolated database transaction.
+
+### 2. Authentication & Credentials
+- **Zero-DB Token Verification**: Uses HMAC-SHA256 access tokens validated on the server without database lookups.
+- **Session Observers**: Subscriptions to token changes (`onChange`) enabling dynamic UI re-rendering and automatic token persistence.
+- **Android Secure Storage**: Android library integrates with AndroidX `EncryptedSharedPreferences` and the hardware Android Keystore.
+- **Runtime Scoped API Keys**: Pass API keys (`mbk_<env>_...`) seamlessly via `key` client option, attaching `Authorization: Bearer <key>` to all requests.
+
+### 3. File Storage & Image Thumbnails
+- **Content-Addressed Blobs**: Storage handles raw binary bytes, Blobs, byte arrays, and text payloads with BLAKE3 deduplication on the backend.
+- **Direct & Presigned URLs**: Generate public or authenticated download URLs directly via `files.getURL(bucket, key)`.
+- **Dynamic Image Resizing**: Request on-demand generated thumbnails by providing `{ thumb: "WxH" }` (e.g. `100x100`, `300x200`), cached on the server and bounded by a worker pool.
+
+### 4. Realtime Streaming
+- **Single Multiplexed Connection**: Shares a single persistent Server-Sent Events (SSE) connection per app rather than opening separate sockets per collection.
+- **Demand-Driven Lifecycle**: Opens the SSE stream on the first collection subscription; closes the stream automatically when all subscribers unsubscribe.
+- **Resilient Reconnection**: Exponential backoff with randomized jitter handles network drops and backend restarts.
+
+### 5. Analytics & Event Queue
+- **Buffered Event Pipeline**: Ingest analytics events via `mono.analytics.track("event_name", { properties })`.
+- **Automated Flushing**: Events queue locally and automatically flush when reaching the batch size limit (e.g. 20 events) or on periodic timer intervals (e.g. every 5 seconds).
+
+### 6. Error Handling & RFC 9457
+- **Structured Error Model**: Non-2xx HTTP responses parse RFC 9457 `application/problem+json` into native language exceptions (`MonolithError`, `MonolithException`).
+- **Validation Diagnostics**: Direct access to specific field validation errors (e.g. `err.getFieldError("email")`).
+- **Tracing**: Automatically captures and surfaces `requestId` (`X-Request-Id`) on every failed request for instant log correlation.
+
+---
+
+## SDK Catalog & Package Coordinates
+
+| Language | Registry & Package | Platforms | Implementation Status |
+|---|---|---|---|
+| **TypeScript** | npm: [`@monolith/client`](typescript) | Web browsers, Node >= 20, Bun, Deno, React Native | **v0 implemented** (ESM + CJS, bundled `.d.ts`) |
+| **Kotlin / Android** | Maven: `dev.monolith:monolith-core`, `monolith-android` | Android (AAR), JVM, Kotlin Multiplatform | **v0 implemented** (Ktor CIO, EncryptedSharedPreferences) |
+| **Dart** | pub.dev: [`monolith_client`](dart) | Flutter (Android, iOS, macOS, Windows, Linux, Web) | **v0 implemented** (http client, stream listeners) |
+| **Python** | PyPI: [`monolith-client`](python) | Python >= 3.10 | **v0 implemented** (httpx client, pytest suite) |
+| **Rust** | crates.io: [`monolith-client`](rust) | Rust stable 2024 (CLI, workers, microservices) | **v0 implemented** (reqwest, tokio, serde) |
+| **Swift** | SwiftPM: [`Monolith`](swift) | iOS, macOS, watchOS, visionOS | Phase 5 planned |
 
 ---
 
@@ -36,18 +105,20 @@ All SDKs follow the uniform module layout outlined in `development/docs/21-repos
 ```
 sdks/<lang>/
 ├── client        # Root MonolithClient entry point & configuration
-├── http          # Request pipeline, backoff retries, header handling
-├── auth          # Password sign-in, token storage, listeners
+├── http          # Request pipeline, backoff retries, header handling, types
+├── auth          # Password sign-in, installer link bootstrap, token storage, listeners
 ├── collections   # Typed CRUD, query builders, count, batch
-├── realtime      # Multiplexed SSE connection, subscriptions
-├── files         # Bucket & object uploads, URLs, thumbnails
+├── realtime      # Multiplexed SSE connection, subscriptions, reconnect backoff
+├── files         # Bucket & object uploads, URLs, thumbnails, deletion
 ├── analytics     # Batched event queue & background flush
-└── errors        # RFC 9457 problem+json error mapping
+└── errors        # RFC 9457 problem+json error mapping & field problem parser
 ```
 
-### Quick Usage Examples
+---
 
-#### TypeScript
+## Code Examples
+
+### TypeScript
 ```ts
 import { createClient } from "@monolith/client";
 
@@ -73,7 +144,7 @@ await mono.files.upload("receipts", "task_1.png", fileBlob);
 const thumbUrl = mono.files.getURL("receipts", "task_1.png", { thumb: "200x200" });
 ```
 
-#### Kotlin / Android
+### Kotlin / Android
 ```kotlin
 import dev.monolith.android.MonolithAndroid
 
@@ -98,7 +169,7 @@ mono.collection("tasks").subscribeAsFlow().collect { event ->
 mono.files.upload("receipts", "task_1.png", byteArray)
 ```
 
-#### Python
+### Python
 ```python
 from monolith import create_client
 
@@ -115,7 +186,7 @@ client.files.upload("receipts", "task_1.png", b"file bytes")
 thumb_url = client.files.get_url("receipts", "task_1.png", thumb="200x200")
 ```
 
-#### Dart / Flutter
+### Dart / Flutter
 ```dart
 import 'package:monolith_client/monolith_client.dart';
 
@@ -133,7 +204,7 @@ final unsub = mono.collection('tasks').subscribe((event) {
 });
 ```
 
-#### Rust
+### Rust
 ```rust
 use monolith_client::Client;
 

@@ -286,6 +286,30 @@ Monolith provides official native client libraries sharing a consistent interfac
 | **Analytics** | Asynchronous in-memory event tracking (`track`), automated periodic and size-bounded batch flushing (`flush`), and retry buffering. |
 | **Error Handling** | RFC 9457 `application/problem+json` mapped to typed native exceptions with HTTP status codes, problem types, request IDs (`X-Request-Id`), and granular field-level validation errors. |
 
+### SDK capability checklist & support matrix
+
+| Domain | Capability | TypeScript | Kotlin / Android | Dart / Flutter | Python | Rust | Swift |
+|---|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Database** | Keyset list (`list()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Record lookup (`getOne()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Record mutations (`create`, `update`, `replace`, `delete`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Record count (`count()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Filters, sorting, projection & `expand` | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Transactional batch (`batch()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| **Auth** | Password login (`signInWithPassword`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Installer link bootstrap (`install`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Reactive session listeners (`onChange` / Flow / Stream) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Secure token persistence | Web Storage | EncryptedSharedPrefs | In-memory | In-memory | In-memory | [ ] |
+| | Scoped API key auth headers | [x] | [x] | [x] | [x] | [x] | [ ] |
+| **Storage** | Object upload & deletion | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Download URLs with thumbnails (`?thumb=WxH`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Bucket object listing | [x] | [x] | [x] | [x] | [x] | [ ] |
+| **Realtime** | Multiplexed SSE connection with backoff retry | [x] | [x] | [x] | Planned | Planned | [ ] |
+| | Per-collection subscriptions (`subscribe()`) | [x] | [x] | [x] | Planned | Planned | [ ] |
+| **Analytics** | Buffered event tracking & periodic batch flush | [x] | [x] | [x] | [x] | Planned | [ ] |
+| **Errors** | RFC 9457 `problem+json` & field validation errors | [x] | [x] | [x] | [x] | [x] | [ ] |
+| **Offline** | Local replica caching & sync | Phase 3 | Phase 3 | Phase 3 | Phase 3 | Phase 3 | Phase 5 |
+
 ### Language support & registries
 
 | Language | Package / Registry | Target platforms | Status |
