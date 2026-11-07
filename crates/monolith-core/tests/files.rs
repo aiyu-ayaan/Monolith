@@ -1,7 +1,6 @@
-use std::io::Read;
 use std::path::Path;
 
-use monolith_core::{BucketIn, CoreError, Files, ObjectInfo, Registry};
+use monolith_core::{Blob, BucketIn, CoreError, Files, ObjectInfo, Registry};
 
 fn bucket(name: &str) -> BucketIn {
     serde_json::from_value(serde_json::json!({"name": name})).unwrap()
@@ -41,10 +40,15 @@ fn blobs(dir: &Path) -> usize {
         .unwrap_or(0)
 }
 
-fn read(mut f: std::fs::File) -> Vec<u8> {
-    let mut v = Vec::new();
-    f.read_to_end(&mut v).unwrap();
-    v
+async fn read((info, blob): (ObjectInfo, Blob)) -> Vec<u8> {
+    blob.read_all(info.size).await.unwrap()
+}
+
+fn local(b: Blob) -> std::fs::File {
+    match b {
+        Blob::Local(f) => f,
+        Blob::Remote { .. } => panic!("expected a local file"),
+    }
 }
 
 async fn setup() -> (tempfile::TempDir, Registry, std::sync::Arc<Files>) {
@@ -84,9 +88,10 @@ async fn buckets_objects_overwrite_list_and_limits() {
         (o.size, o.etag.as_str()),
         (5, blake3::hash(b"12345").to_hex().as_str())
     );
-    let (info, file) = f.open_object("pics", "a/b.png").await.unwrap();
+    let got = f.open_object("pics", "a/b.png").await.unwrap();
+    let mime = got.0.mime.clone();
     assert_eq!(
-        (read(file), info.mime.as_str()),
+        (read(got).await, mime.as_str()),
         (b"12345".to_vec(), "image/png")
     );
 
@@ -204,7 +209,7 @@ async fn identical_content_is_stored_once_until_the_last_reference() {
     f.delete_object("a", "one").await.unwrap();
     f.delete_object("a", "two").await.unwrap();
     assert_eq!(blobs(dir.path()), 1, "still referenced from bucket b");
-    assert_eq!(read(f.open_object("b", "three").await.unwrap().1), body);
+    assert_eq!(read(f.open_object("b", "three").await.unwrap()).await, body);
     // Replacing the last reference with other content frees the old blob.
     put(&f, "b", "three", "text/plain", b"other").await.unwrap();
     assert_eq!(blobs(dir.path()), 1);
@@ -383,7 +388,10 @@ async fn legacy_layout_is_migrated_on_open() {
     let f = reg.files("s").await.unwrap();
     let bi = f.bucket_info("old").await.unwrap();
     assert_eq!((bi.objects, bi.bytes), (2, 10));
-    assert_eq!(read(f.open_object("old", "a").await.unwrap().1), b"hello");
+    assert_eq!(
+        read(f.open_object("old", "a").await.unwrap()).await,
+        b"hello"
+    );
     assert_eq!(
         f.object_info("old", "b").await.unwrap().etag,
         blake3::hash(b"hello").to_hex().as_str()
@@ -448,9 +456,12 @@ async fn backups_carry_storage_and_restore_it() {
         (bi.objects, bi.bytes, bi.max_bytes, bi.public),
         (3, 16, Some(100), true)
     );
-    assert_eq!(read(c.open_object("b", "x/one").await.unwrap().1), b"first");
     assert_eq!(
-        read(c.open_object("b", "three").await.unwrap().1),
+        read(c.open_object("b", "x/one").await.unwrap()).await,
+        b"first"
+    );
+    assert_eq!(
+        read(c.open_object("b", "three").await.unwrap()).await,
         b"second"
     );
     // The restored app is independent: deleting there does not touch the backup.
@@ -519,19 +530,29 @@ async fn thumbnails_are_declared_cached_and_cleaned_up() {
 
     // Crop to fill, keep aspect, fit inside; opaque sources become JPEG.
     let (i, file) = f.thumbnail("img", "photo.png", "50x50").await.unwrap();
-    assert_eq!((dims(file), i.mime.as_str()), ((50, 50), "image/jpeg"));
+    assert_eq!(
+        (dims(local(file)), i.mime.as_str()),
+        ((50, 50), "image/jpeg")
+    );
     assert!(i.etag.ends_with("-50x50") && i.size > 0);
     assert_eq!(
-        dims(f.thumbnail("img", "photo.png", "100x0").await.unwrap().1),
+        dims(local(
+            f.thumbnail("img", "photo.png", "100x0").await.unwrap().1
+        )),
         (100, 50)
     );
     assert_eq!(
-        dims(f.thumbnail("img", "photo.png", "80x80f").await.unwrap().1),
+        dims(local(
+            f.thumbnail("img", "photo.png", "80x80f").await.unwrap().1
+        )),
         (80, 40)
     );
     // Transparency is kept (PNG out).
     let (i, file) = f.thumbnail("img", "logo.png", "50x50").await.unwrap();
-    assert_eq!((dims(file), i.mime.as_str()), ((50, 50), "image/png"));
+    assert_eq!(
+        (dims(local(file)), i.mime.as_str()),
+        ((50, 50), "image/png")
+    );
 
     // Only declared sizes, only images.
     assert!(matches!(
@@ -615,4 +636,191 @@ where
         out.push(h.await.unwrap());
     }
     out
+}
+
+async fn remote_blobs(
+    store: &std::sync::Arc<object_store::memory::InMemory>,
+) -> Vec<object_store::ObjectMeta> {
+    use futures_util::TryStreamExt;
+    use object_store::ObjectStore;
+    store.list(None).try_collect().await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn object_store_backend_dedupes_ranges_thumbnails_gc_and_backups() {
+    use object_store::ObjectStore;
+    let dir = tempfile::tempdir().unwrap();
+    let reg = Registry::open(dir.path()).await.unwrap();
+    reg.create_app("s").await.unwrap();
+    let store = std::sync::Arc::new(object_store::memory::InMemory::new());
+    let f = reg.use_object_store("s", store.clone()).await.unwrap();
+    f.put_bucket(
+        bucket_with(serde_json::json!({"name":"b","thumbSizes":["20x20"]})),
+        true,
+    )
+    .await
+    .unwrap();
+
+    // Small (single put) and large (multipart) uploads; identical content is one remote object.
+    let big: Vec<u8> = (0..9 * 1024 * 1024).map(|i: u32| (i % 253) as u8).collect();
+    put(&f, "b", "one", "text/plain", b"same").await.unwrap();
+    put(&f, "b", "two", "text/plain", b"same").await.unwrap();
+    put(&f, "b", "big", "application/octet-stream", &big)
+        .await
+        .unwrap();
+    let metas = remote_blobs(&store).await;
+    assert_eq!(metas.len(), 2, "{metas:?}");
+    assert!(
+        metas
+            .iter()
+            .all(|m| m.location.as_ref().starts_with("blobs/"))
+    );
+    assert_eq!(blobs(dir.path()), 0, "no blob bytes on local disk");
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("apps/s/files/.tmp"))
+            .unwrap()
+            .count(),
+        0
+    );
+
+    // Whole and ranged reads come from the store.
+    assert_eq!(
+        read(f.open_object("b", "one").await.unwrap()).await,
+        b"same"
+    );
+    let (_, blob) = f.open_object("b", "big").await.unwrap();
+    let mut s = blob.read(1_000_000, 4096).await.unwrap();
+    let mut got = Vec::new();
+    while let Some(c) =
+        std::future::poll_fn(|cx| futures_core::Stream::poll_next(std::pin::Pin::new(&mut s), cx))
+            .await
+    {
+        got.extend_from_slice(&c.unwrap());
+    }
+    assert_eq!(got, &big[1_000_000..1_004_096]);
+
+    // Thumbnails are made from the remote source and cached locally.
+    put(&f, "b", "pic.png", "image/png", &png(80, 60, false))
+        .await
+        .unwrap();
+    let (i, blob) = f.thumbnail("b", "pic.png", "20x20").await.unwrap();
+    assert_eq!(
+        (dims(local(blob)), i.mime.as_str()),
+        ((20, 20), "image/jpeg")
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("apps/s/files/.tmp"))
+            .unwrap()
+            .count(),
+        0
+    );
+
+    // The last reference deletes the remote object; a replaced one too.
+    f.delete_object("b", "one").await.unwrap();
+    assert_eq!(
+        remote_blobs(&store).await.len(),
+        3,
+        "still referenced by `two`"
+    );
+    f.delete_object("b", "two").await.unwrap();
+    put(&f, "b", "big", "application/octet-stream", b"small now")
+        .await
+        .unwrap();
+    f.delete_object("b", "pic.png").await.unwrap();
+    assert_eq!(remote_blobs(&store).await.len(), 1);
+
+    // GC spares young orphans and reports blobs the store lost.
+    store
+        .put(
+            &object_store::path::Path::from(format!("blobs/ab/{}", "e".repeat(64))),
+            "x".into(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(f.gc().await.unwrap().removed_files, 0);
+    let h = blake3::hash(b"small now").to_hex().to_string();
+    store
+        .delete(&object_store::path::Path::from(format!(
+            "blobs/{}/{h}",
+            &h[..2]
+        )))
+        .await
+        .unwrap();
+    assert_eq!(f.gc().await.unwrap().missing_files, 1);
+    assert!(matches!(
+        f.open_object("b", "big").await.unwrap().1.read(0, 1).await,
+        Err(CoreError::NotFound(_))
+    ));
+
+    // A backup keeps the metadata; the blobs stay in the store and are not copied.
+    put(&f, "b", "keep", "text/plain", b"kept").await.unwrap();
+    let b = reg.create_backup("s").await.unwrap();
+    assert!(b.files);
+    let bdir = dir
+        .path()
+        .join("backups/s")
+        .join(format!("{}.files", &b.name[..18]));
+    assert!(bdir.join("files.db").exists() && !bdir.join("blobs").exists());
+    reg.restore_backup("s", &b.name, "copy").await.unwrap();
+    let c = reg.use_object_store("copy", store.clone()).await.unwrap();
+    assert_eq!(
+        read(c.open_object("b", "keep").await.unwrap()).await,
+        b"kept"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_config_validation_and_backend_lock() {
+    use monolith_core::StorageConfigIn;
+    let (_dir, reg, f) = setup().await;
+    let cfg = |v: serde_json::Value| -> StorageConfigIn { serde_json::from_value(v).unwrap() };
+    assert_eq!(reg.storage_config("s").await.unwrap().backend, "local");
+    let s3 = |extra: serde_json::Value| {
+        let mut v =
+            serde_json::json!({"bucket":"my-bucket","accessKeyId":"AK","secretAccessKey":"SK"});
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        cfg(serde_json::json!({"backend":"s3","s3":v}))
+    };
+    for bad in [
+        serde_json::json!({"bucket":"x"}),
+        serde_json::json!({"region":"US EAST"}),
+        serde_json::json!({"endpoint":"http://minio:9000"}),
+        serde_json::json!({"prefix":"a/../b"}),
+        serde_json::json!({"secretAccessKey":""}),
+    ] {
+        assert!(
+            matches!(
+                reg.put_storage_config("s", s3(bad.clone())).await,
+                Err(CoreError::Validation(_))
+            ),
+            "{bad}"
+        );
+    }
+    assert!(matches!(
+        reg.put_storage_config("s", cfg(serde_json::json!({"backend":"ftp"})))
+            .await,
+        Err(CoreError::Validation(_))
+    ));
+    assert!(matches!(
+        reg.put_storage_config("s", cfg(serde_json::json!({"backend":"s3"})))
+            .await,
+        Err(CoreError::Validation(_))
+    ));
+    // With files present the backend cannot change (nothing would move them).
+    f.put_bucket(bucket("b"), true).await.unwrap();
+    put(&f, "b", "k", "text/plain", b"x").await.unwrap();
+    assert!(matches!(
+        reg.put_storage_config("s", s3(serde_json::json!({}))).await,
+        Err(CoreError::Conflict(_))
+    ));
+    // Switching to the same backend is fine and keeps working.
+    let v = reg
+        .put_storage_config("s", cfg(serde_json::json!({"backend":"local"})))
+        .await
+        .unwrap();
+    assert_eq!(v.backend, "local");
+    let f2 = reg.files("s").await.unwrap();
+    assert_eq!(read(f2.open_object("b", "k").await.unwrap()).await, b"x");
 }

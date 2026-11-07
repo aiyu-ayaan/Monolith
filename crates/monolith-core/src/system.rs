@@ -356,6 +356,17 @@ impl Registry {
             Ok(_) | Err(StoreError::NotFound) => {}
             Err(e) => return Err(e.into()),
         }
+        match self
+            .sys
+            .write(sys_delete(
+                "DELETE FROM settings WHERE key = ?",
+                vec![Value::Text(format!("storage:{name}").into())],
+            ))
+            .await
+        {
+            Ok(_) | Err(StoreError::NotFound) => {}
+            Err(e) => return Err(e.into()),
+        }
         self.drop_api_keys(name).await?;
         self.files
             .write()

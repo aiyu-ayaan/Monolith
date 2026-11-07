@@ -14,17 +14,21 @@
 //!
 //! Limits: local disk only, metadata commits are serialized per app.
 
+use futures_core::Stream as _;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+use futures_util::StreamExt;
 use monolith_store::id::{encode_string, new_id};
 use monolith_store::{
     AppStore, Error as StoreError, MigrationPlan, Mutation, Query, SqliteConfig, SqliteStore,
     Value, WriteOp,
 };
+use object_store::path::Path as ObjPath;
+use object_store::{GetOptions, GetRange, ObjectStore, PutPayload, WriteMultipart};
 use serde::{Deserialize, Serialize};
 
 use crate::app::now_us;
@@ -39,6 +43,8 @@ pub const MAX_OBJECT_SIZE: u64 = 10 << 30;
 pub const MAX_KEY: usize = 512;
 const MAX_MIME_RULES: usize = 32;
 const MAX_THUMB_SIZES: usize = 16;
+/// Largest image fetched from a remote store to make a thumbnail.
+const REMOTE_THUMB_SOURCE_MAX: u64 = 64 << 20;
 const MAX_LIST: usize = 1000;
 /// Bytes of an upload kept to sniff its type.
 const SNIFF_BYTES: usize = 8192;
@@ -258,9 +264,125 @@ fn object_of(r: &[Value]) -> ObjectInfo {
 
 const OBJ_COLS: &str = "key, size, mime, etag, created, updated";
 
+/// Where blob bytes live. Metadata (`files.db`) and thumbnails stay on local disk either way.
+#[derive(Clone)]
+pub enum Backend {
+    Local,
+    /// An S3-compatible bucket (or any `object_store`), keys `blobs/<h[0..2]>/<hash>`.
+    Remote(Arc<dyn ObjectStore>),
+}
+
+fn obj_path(hash: &str) -> ObjPath {
+    ObjPath::from(format!("blobs/{}/{hash}", &hash[..2]))
+}
+
+fn remote_io(e: object_store::Error) -> CoreError {
+    match e {
+        object_store::Error::NotFound { .. } => CoreError::NotFound("object"),
+        e => CoreError::Internal(format!("object store: {e}")),
+    }
+}
+
+/// An open blob, readable in ranges.
+pub enum Blob {
+    Local(File),
+    Remote {
+        store: Arc<dyn ObjectStore>,
+        path: ObjPath,
+    },
+}
+
+/// Chunks of a blob range, ready for an HTTP body.
+pub struct BlobStream(StreamInner);
+
+enum StreamInner {
+    Local(tokio::sync::mpsc::Receiver<std::io::Result<bytes::Bytes>>),
+    Remote(futures_util::stream::BoxStream<'static, std::io::Result<bytes::Bytes>>),
+}
+
+impl futures_core::Stream for BlobStream {
+    type Item = std::io::Result<bytes::Bytes>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        match &mut self.0 {
+            StreamInner::Local(rx) => rx.poll_recv(cx),
+            StreamInner::Remote(s) => s.poll_next_unpin(cx),
+        }
+    }
+}
+
+impl Blob {
+    /// `len` bytes from `offset`. Local files are read in 256 KiB chunks on a blocking thread with
+    /// at most 4 chunks buffered, so a slow client applies backpressure to the disk; remote blobs
+    /// are streamed from the object store with a range request.
+    pub async fn read(self, offset: u64, len: u64) -> CoreResult<BlobStream> {
+        match self {
+            Blob::Local(mut file) => {
+                let (tx, rx) = tokio::sync::mpsc::channel(4);
+                tokio::task::spawn_blocking(move || {
+                    use std::io::{Seek, SeekFrom};
+                    if offset > 0
+                        && let Err(e) = file.seek(SeekFrom::Start(offset))
+                    {
+                        let _ = tx.blocking_send(Err(e));
+                        return;
+                    }
+                    let mut left = len;
+                    while left > 0 {
+                        let mut buf = vec![0u8; left.min(256 * 1024) as usize];
+                        match file.read(&mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                buf.truncate(n);
+                                left -= n as u64;
+                                if tx.blocking_send(Ok(bytes::Bytes::from(buf))).is_err() {
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.blocking_send(Err(e));
+                                break;
+                            }
+                        }
+                    }
+                });
+                Ok(BlobStream(StreamInner::Local(rx)))
+            }
+            Blob::Remote { store, path } => {
+                let opts = GetOptions {
+                    range: Some(GetRange::Bounded(offset..offset + len)),
+                    ..GetOptions::default()
+                };
+                let res = store.get_opts(&path, opts).await.map_err(remote_io)?;
+                Ok(BlobStream(StreamInner::Remote(
+                    res.into_stream()
+                        .map(|r| r.map_err(std::io::Error::other))
+                        .boxed(),
+                )))
+            }
+        }
+    }
+
+    /// The whole blob in memory: for tests and small objects.
+    pub async fn read_all(self, len: u64) -> CoreResult<Vec<u8>> {
+        let mut s = self.read(0, len).await?;
+        let mut out = Vec::new();
+        while let Some(c) =
+            std::future::poll_fn(|cx| std::pin::Pin::new(&mut s).poll_next(cx)).await
+        {
+            out.extend_from_slice(&c.map_err(io)?);
+        }
+        Ok(out)
+    }
+}
+
 /// One app's storage: its `files.db`, bucket cache and blob directory.
 pub struct Files {
     dir: PathBuf,
+    backend: Backend,
     store: SqliteStore,
     buckets: RwLock<HashMap<String, Arc<Bucket>>>,
     /// Serializes metadata commits (read old object, write, release blobs) so counters and
@@ -420,7 +542,11 @@ fn valid_hash(h: &str) -> bool {
 }
 
 impl Files {
-    async fn open(dir: PathBuf, thumb_pool: Arc<tokio::sync::Semaphore>) -> CoreResult<Files> {
+    pub(crate) async fn open(
+        dir: PathBuf,
+        backend: Backend,
+        thumb_pool: Arc<tokio::sync::Semaphore>,
+    ) -> CoreResult<Files> {
         let d = dir.clone();
         let store = tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(d.join(".tmp")).map_err(io)?;
@@ -471,6 +597,7 @@ impl Files {
             .collect();
         let f = Files {
             dir,
+            backend,
             store,
             buckets: RwLock::new(buckets),
             commit: tokio::sync::Mutex::new(()),
@@ -574,6 +701,18 @@ impl Files {
                 })?;
         }
         Ok(())
+    }
+
+    /// Whether any blob is referenced (objects exist).
+    pub async fn has_blobs(&self) -> CoreResult<bool> {
+        let rows = self
+            .store
+            .query(Query {
+                sql: "SELECT 1 FROM blobs LIMIT 1".into(),
+                params: vec![],
+            })
+            .await?;
+        Ok(!rows.is_empty())
     }
 
     /// Cached bucket config; no DB access.
@@ -783,7 +922,20 @@ impl Files {
             ))
             .await?;
         let valid: Vec<&String> = hashes.iter().filter(|h| valid_hash(h)).collect();
-        let paths: Vec<PathBuf> = valid.iter().map(|h| self.blob_path(h)).collect();
+        if let Backend::Remote(store) = &self.backend {
+            for h in &valid {
+                match store.delete(&obj_path(h)).await {
+                    Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
+                    Err(e) => return Err(remote_io(e)),
+                }
+            }
+        }
+        let local = matches!(self.backend, Backend::Local);
+        let paths: Vec<PathBuf> = valid
+            .iter()
+            .filter(|_| local)
+            .map(|h| self.blob_path(h))
+            .collect();
         let thumb_dirs: Vec<PathBuf> = valid
             .iter()
             .map(|h| self.dir.join("thumbs").join(h))
@@ -835,6 +987,10 @@ impl Files {
     /// content already in the app is stored once.
     pub async fn commit(&self, up: Finished) -> CoreResult<ObjectInfo> {
         let bucket = up.bucket.name.clone();
+        if let Backend::Remote(store) = &self.backend {
+            // The slow part runs outside the commit lock.
+            self.put_remote(store, &up.hash, &up.tmp, up.size).await?;
+        }
         let _g = self.commit.lock().await;
         let usage = self.usage(&bucket).await?; // also fails if the bucket vanished meanwhile
         let old = self
@@ -861,18 +1017,27 @@ impl Files {
                 "bucket '{bucket}' would exceed its {cap} byte quota"
             )));
         }
-        // Place the bytes first; an unreferenced file is harmless, a missing one is not.
-        let (src, dest) = (up.tmp.clone(), self.blob_path(&up.hash));
-        let placed = tokio::task::spawn_blocking(move || -> std::io::Result<bool> {
-            if dest.exists() {
-                return std::fs::remove_file(&src).map(|()| false);
+        // Place the bytes first; an unreferenced blob is harmless, a missing one is not.
+        let placed = match &self.backend {
+            Backend::Local => {
+                let (src, dest) = (up.tmp.clone(), self.blob_path(&up.hash));
+                tokio::task::spawn_blocking(move || -> std::io::Result<bool> {
+                    if dest.exists() {
+                        return std::fs::remove_file(&src).map(|()| false);
+                    }
+                    std::fs::create_dir_all(dest.parent().unwrap_or(&dest))?;
+                    std::fs::rename(&src, &dest).map(|()| true)
+                })
+                .await
+                .map_err(join)?
+                .map_err(io)?
             }
-            std::fs::create_dir_all(dest.parent().unwrap_or(&dest))?;
-            std::fs::rename(&src, &dest).map(|()| true)
-        })
-        .await
-        .map_err(join)?
-        .map_err(io)?;
+            // Uploaded before the lock; this finds it unless a delete reaped it in between.
+            Backend::Remote(store) => {
+                self.put_remote(store, &up.hash, &up.tmp, up.size).await?;
+                false
+            }
+        };
         let now = now_us();
         let same = old_hash.as_deref() == Some(up.hash.as_str());
         let (dn, db) = (
@@ -939,6 +1104,63 @@ impl Files {
         })
     }
 
+    /// Uploads a received file to the object store unless that content is already there.
+    async fn put_remote(
+        &self,
+        store: &Arc<dyn ObjectStore>,
+        hash: &str,
+        tmp: &std::path::Path,
+        size: u64,
+    ) -> CoreResult<()> {
+        const CHUNK: usize = 8 << 20;
+        let path = obj_path(hash);
+        match store.head(&path).await {
+            Ok(_) => return Ok(()),
+            Err(object_store::Error::NotFound { .. }) => {}
+            Err(e) => return Err(remote_io(e)),
+        }
+        let t = tmp.to_path_buf();
+        if size as usize <= CHUNK {
+            let data = tokio::task::spawn_blocking(move || std::fs::read(t))
+                .await
+                .map_err(join)?
+                .map_err(io)?;
+            return store
+                .put(&path, PutPayload::from(data))
+                .await
+                .map(drop)
+                .map_err(remote_io);
+        }
+        let upload = store.put_multipart(&path).await.map_err(remote_io)?;
+        let mut w = WriteMultipart::new_with_chunk_size(upload, CHUNK);
+        let mut file = Some(File::open(&t).map_err(io)?);
+        while let Some(mut f) = file.take() {
+            let (f, chunk) = tokio::task::spawn_blocking(move || -> std::io::Result<_> {
+                let mut buf = vec![0u8; CHUNK];
+                let mut n = 0;
+                while n < CHUNK {
+                    let k = f.read(&mut buf[n..])?;
+                    if k == 0 {
+                        break;
+                    }
+                    n += k;
+                }
+                buf.truncate(n);
+                Ok((f, buf))
+            })
+            .await
+            .map_err(join)?
+            .map_err(io)?;
+            if chunk.is_empty() {
+                break;
+            }
+            w.wait_for_capacity(2).await.map_err(remote_io)?;
+            w.write(&chunk);
+            file = Some(f);
+        }
+        w.finish().await.map(drop).map_err(remote_io)
+    }
+
     async fn find(&self, bucket: &str, key: &str) -> CoreResult<ObjectInfo> {
         let rows = self
             .store
@@ -957,22 +1179,32 @@ impl Files {
         self.find(bucket, key).await
     }
 
-    /// Metadata plus the open blob. The file stays readable even if the object is replaced meanwhile.
-    pub async fn open_object(&self, bucket: &str, key: &str) -> CoreResult<(ObjectInfo, File)> {
+    /// Metadata plus the blob. A local file stays readable even if the object is replaced meanwhile.
+    pub async fn open_object(&self, bucket: &str, key: &str) -> CoreResult<(ObjectInfo, Blob)> {
         self.bucket(bucket)?;
         let info = self.find(bucket, key).await?;
         if !valid_hash(&info.etag) {
             return Err(CoreError::NotFound("object"));
         }
-        let p = self.blob_path(&info.etag);
-        let f = tokio::task::spawn_blocking(move || File::open(p))
-            .await
-            .map_err(join)?
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::NotFound => CoreError::NotFound("object"),
-                _ => io(e),
-            })?;
-        Ok((info, f))
+        let blob = match &self.backend {
+            Backend::Local => {
+                let p = self.blob_path(&info.etag);
+                Blob::Local(
+                    tokio::task::spawn_blocking(move || File::open(p))
+                        .await
+                        .map_err(join)?
+                        .map_err(|e| match e.kind() {
+                            std::io::ErrorKind::NotFound => CoreError::NotFound("object"),
+                            _ => io(e),
+                        })?,
+                )
+            }
+            Backend::Remote(store) => Blob::Remote {
+                store: store.clone(),
+                path: obj_path(&info.etag),
+            },
+        };
+        Ok((info, blob))
     }
 
     /// A cached or freshly made thumbnail of an image object, as `(info, file)`. The info is the
@@ -984,7 +1216,7 @@ impl Files {
         bucket: &str,
         key: &str,
         spec: &str,
-    ) -> CoreResult<(ObjectInfo, File)> {
+    ) -> CoreResult<(ObjectInfo, Blob)> {
         let b = self.bucket(bucket)?;
         let sp = Spec::parse(spec)
             .filter(|_| b.thumb_sizes.iter().any(|t| t == spec))
@@ -1036,18 +1268,43 @@ impl Files {
                     .acquire()
                     .await
                     .map_err(|e| CoreError::Internal(e.to_string()))?;
-                let (src, tmp) = (
-                    self.blob_path(&info.etag),
-                    self.dir.join(".tmp").join(encode_string(&new_id())),
-                );
+                let tmp = self.dir.join(".tmp").join(encode_string(&new_id()));
+                // A remote source is fetched into a temp file first (images only, so bounded).
+                let (src, fetched) = match &self.backend {
+                    Backend::Local => (self.blob_path(&info.etag), false),
+                    Backend::Remote(store) => {
+                        if info.size > REMOTE_THUMB_SOURCE_MAX {
+                            return Err(CoreError::TooLarge(format!(
+                                "image over {REMOTE_THUMB_SOURCE_MAX} bytes cannot be thumbnailed from a remote store"
+                            )));
+                        }
+                        let data = store
+                            .get(&obj_path(&info.etag))
+                            .await
+                            .map_err(remote_io)?
+                            .bytes()
+                            .await
+                            .map_err(remote_io)?;
+                        let p = self.dir.join(".tmp").join(encode_string(&new_id()));
+                        let w = p.clone();
+                        tokio::task::spawn_blocking(move || std::fs::write(w, data))
+                            .await
+                            .map_err(join)?
+                            .map_err(io)?;
+                        (p, true)
+                    }
+                };
                 let (d, spec_s) = (dir.clone(), spec.to_owned());
                 let made =
                     tokio::task::spawn_blocking(move || -> CoreResult<(File, &'static str)> {
-                        if !src.exists() {
+                        if !fetched && !src.exists() {
                             return Err(CoreError::NotFound("object"));
                         }
-                        let mime = thumbs::make(&src, sp, &tmp)
-                            .inspect_err(|_| drop(std::fs::remove_file(&tmp)))?;
+                        let made = thumbs::make(&src, sp, &tmp);
+                        if fetched {
+                            let _ = std::fs::remove_file(&src);
+                        }
+                        let mime = made.inspect_err(|_| drop(std::fs::remove_file(&tmp)))?;
                         let ext = if mime == "image/png" { "png" } else { "jpg" };
                         std::fs::create_dir_all(&d).map_err(io)?;
                         std::fs::rename(&tmp, d.join(format!("{spec_s}.{ext}"))).map_err(io)?;
@@ -1071,7 +1328,7 @@ impl Files {
         info.size = len;
         info.mime = mime.to_owned();
         info.etag = format!("{}-{spec}", info.etag);
-        Ok((info, file))
+        Ok((info, Blob::Local(file)))
     }
 
     pub async fn delete_object(&self, bucket: &str, key: &str) -> CoreResult<()> {
@@ -1134,6 +1391,39 @@ impl Files {
         Ok(ObjectPage { items, next_cursor })
     }
 
+    /// The object-store version of the sweep: one flat listing of `blobs/` compared with the table.
+    async fn gc_remote(&self, store: &Arc<dyn ObjectStore>, rep: &mut GcReport) -> CoreResult<()> {
+        let rows = self
+            .store
+            .query(Query {
+                sql: "SELECT hash FROM blobs".into(),
+                params: vec![],
+            })
+            .await?;
+        let known: HashSet<String> = rows.iter().map(|r| text(&r[0])).collect();
+        let mut present = HashSet::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+        let mut list = store.list(Some(&ObjPath::from("blobs")));
+        while let Some(m) = list.next().await {
+            let m = m.map_err(remote_io)?;
+            let Some(name) = m.location.filename().map(str::to_owned) else {
+                continue;
+            };
+            if known.contains(&name) {
+                present.insert(name);
+            } else if now - m.last_modified.timestamp() > GC_GRACE.as_secs() as i64
+                && store.delete(&m.location).await.is_ok()
+            {
+                rep.removed_files += 1;
+                rep.removed_bytes += m.size;
+            }
+        }
+        rep.missing_files = known.difference(&present).count() as u64;
+        Ok(())
+    }
+
     /// Removes thumbnail directories whose blob is gone (a crash between the blob delete and the
     /// thumbnail delete). Returns how many.
     async fn gc_thumbs(&self) -> CoreResult<u64> {
@@ -1185,6 +1475,10 @@ impl Files {
             .map_err(join)?
             .map_err(io)?;
         self.store.snapshot(dest.join("files.db")).await?;
+        // Blobs in an object store are not copied: they have their own durability.
+        if matches!(self.backend, Backend::Remote(_)) {
+            return Ok(());
+        }
         let rows = self
             .store
             .query(Query {
@@ -1218,6 +1512,11 @@ impl Files {
     /// minutes are skipped, since a commit may be about to reference them. Safe to run at any time.
     pub async fn gc(&self) -> CoreResult<GcReport> {
         let mut rep = GcReport::default();
+        if let Backend::Remote(store) = &self.backend {
+            self.gc_remote(store, &mut rep).await?;
+            rep.removed_thumb_dirs = self.gc_thumbs().await?;
+            return Ok(rep);
+        }
         for p in 0..256u32 {
             let pre = format!("{p:02x}");
             let rows = self
@@ -1289,8 +1588,17 @@ impl Registry {
             return Ok(f.clone());
         }
         self.app_info(app).await?;
-        let f =
-            Arc::new(Files::open(self.app_dir(app).join("files"), self.thumb_pool.clone()).await?);
+        let f = {
+            let backend = self.backend_for(app).await?;
+            Arc::new(
+                Files::open(
+                    self.app_dir(app).join("files"),
+                    backend,
+                    self.thumb_pool.clone(),
+                )
+                .await?,
+            )
+        };
         self.files
             .write()
             .unwrap_or_else(|e| e.into_inner())

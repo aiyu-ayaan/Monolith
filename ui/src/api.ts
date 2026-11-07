@@ -283,6 +283,20 @@ export interface StorageObject {
   updated: string;
 }
 
+export interface StorageConfig {
+  backend: "local" | "s3";
+  s3: null | {
+    bucket: string;
+    region: string;
+    endpoint: string | null;
+    prefix: string;
+    accessKeyId: string;
+    secretAccessKeySet: boolean;
+    allowHttp: boolean;
+    pathStyle: boolean;
+  };
+}
+
 export interface Backup {
   name: string;
   bytes: number;

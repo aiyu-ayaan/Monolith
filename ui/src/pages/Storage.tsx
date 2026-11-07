@@ -1,6 +1,6 @@
 import { createResource, createSignal, For, Show } from "solid-js";
 import { useParams } from "@solidjs/router";
-import { api, enc, ready, token, type ApiError, type Bucket, type StorageObject } from "../api";
+import { api, enc, ready, token, type ApiError, type Bucket, type StorageConfig, type StorageObject } from "../api";
 import { fmtBytes } from "../charts";
 import { Drawer, fmtDate, Icon, toast } from "../ui";
 import ErrorBox from "./ErrorBox";
@@ -21,6 +21,10 @@ export default function Storage() {
   const [extra, setExtra] = createSignal<StorageObject[]>([]);
   const [cursor, setCursor] = createSignal<string | null>(null);
   const [creating, setCreating] = createSignal(false);
+  const cfgUrl = () => `/api/v1/apps/${enc(params.app!)}/storage/config`;
+  const [cfg, { refetch: refetchCfg }] = createResource(cfgUrl, (u) => api<StorageConfig>("GET", u));
+  const [editing, setEditing] = createSignal(false);
+  const [s3, setS3] = createSignal({ bucket: "", region: "us-east-1", endpoint: "", prefix: "", accessKeyId: "", secretAccessKey: "", pathStyle: false, allowHttp: false });
   const [f, setF] = createSignal({ name: "", public: false, maxMb: "100", quotaMb: "", mime: "", thumbs: "" });
 
   const q = () => (selected() ? { b: selected()!, p: prefix() } : null);
@@ -58,6 +62,23 @@ export default function Storage() {
       setExtra([...extra(), ...r.items]);
       setCursor(r.nextCursor);
     });
+
+  const openCfg = () => {
+    const c = ready(cfg)?.s3;
+    setS3({ bucket: c?.bucket ?? "", region: c?.region ?? "us-east-1", endpoint: c?.endpoint ?? "", prefix: c?.prefix ?? "", accessKeyId: c?.accessKeyId ?? "", secretAccessKey: "", pathStyle: c?.pathStyle ?? false, allowHttp: c?.allowHttp ?? false });
+    setError(null);
+    setEditing(true);
+  };
+
+  const saveCfg = async (e: SubmitEvent, backend: "local" | "s3") => {
+    e.preventDefault();
+    const v = s3();
+    await run(async () => {
+      await api("PUT", cfgUrl(), backend === "local" ? { backend } : { backend, s3: { ...v, endpoint: v.endpoint || undefined, secretAccessKey: v.secretAccessKey || undefined } });
+      setEditing(false);
+      refetchCfg();
+    }, "Storage backend saved");
+  };
 
   const create = async (e: SubmitEvent) => {
     e.preventDefault();
@@ -142,8 +163,12 @@ export default function Storage() {
       <p class="notice">
         <Icon name="alert" size={16} />
         <span>
-          Local disk only. Identical files are stored once, and image thumbnails of the sizes you declare are made on demand. Public buckets let anyone who knows a key read it; listing and writes always need a credential. Per-user access rules and S3 are planned.
+          Identical files are stored once, and image thumbnails of the sizes you declare are made on demand. Public buckets let anyone who knows a key read it; listing and writes always need a credential. Per-user access rules are planned. With S3, backups hold the metadata only; the bytes stay in your bucket.
         </span>
+      </p>
+      <p class="muted small">
+        File bytes are on <strong>{ready(cfg)?.backend === "s3" ? `S3 bucket ${ready(cfg)?.s3?.bucket}${ready(cfg)?.s3?.prefix ? `/${ready(cfg)?.s3?.prefix}` : ""}` : "this server's disk"}</strong>.{" "}
+        <button class="link" onClick={openCfg}>Change backend…</button>
       </p>
       <div class="table-wrap">
         <table class="grid">
@@ -237,6 +262,66 @@ export default function Storage() {
             </Show>
           </section>
         )}
+      </Show>
+
+      <Show when={editing()}>
+        <Drawer
+          title="Storage backend"
+          onClose={() => setEditing(false)}
+          onSubmit={(e) => saveCfg(e, "s3")}
+          footer={
+            <>
+              <button type="button" class="btn secondary" onClick={() => setEditing(false)}>
+                Cancel
+              </button>
+              <button type="button" class="btn secondary" disabled={busy()} onClick={(e) => saveCfg(e as unknown as SubmitEvent, "local")}>
+                Use local disk
+              </button>
+              <button class="btn" type="submit" disabled={busy()}>
+                Save S3 settings
+              </button>
+            </>
+          }
+        >
+          <ErrorBox error={error()} />
+          <p class="muted small">Works with AWS S3 and S3-compatible services (MinIO, R2, B2, Wasabi). Saving checks the connection by writing and deleting a test object. Existing files are not moved, so the bucket cannot change once this app holds files. The secret is stored unencrypted on this server and never shown again.</p>
+          <div class="field">
+            <label for="s3b">Bucket</label>
+            <input id="s3b" class="mono" required value={s3().bucket} onInput={(e) => setS3({ ...s3(), bucket: e.currentTarget.value })} />
+          </div>
+          <div class="field">
+            <label for="s3r">Region</label>
+            <input id="s3r" class="mono" required value={s3().region} onInput={(e) => setS3({ ...s3(), region: e.currentTarget.value })} />
+          </div>
+          <div class="field">
+            <label for="s3e">Endpoint</label>
+            <input id="s3e" class="mono" placeholder="https://minio.example.com" value={s3().endpoint} onInput={(e) => setS3({ ...s3(), endpoint: e.currentTarget.value })} />
+            <span class="help">Only for S3-compatible services. Leave empty for AWS.</span>
+          </div>
+          <div class="field">
+            <label for="s3p">Key prefix</label>
+            <input id="s3p" class="mono" placeholder="monolith/" value={s3().prefix} onInput={(e) => setS3({ ...s3(), prefix: e.currentTarget.value })} />
+          </div>
+          <div class="field">
+            <label for="s3k">Access key id</label>
+            <input id="s3k" class="mono" required autocomplete="off" value={s3().accessKeyId} onInput={(e) => setS3({ ...s3(), accessKeyId: e.currentTarget.value })} />
+          </div>
+          <div class="field">
+            <label for="s3s">Secret access key</label>
+            <input id="s3s" class="mono" type="password" autocomplete="new-password" placeholder={ready(cfg)?.s3?.secretAccessKeySet ? "Unchanged" : ""} value={s3().secretAccessKey} onInput={(e) => setS3({ ...s3(), secretAccessKey: e.currentTarget.value })} />
+          </div>
+          <div class="field">
+            <label>
+              <input type="checkbox" checked={s3().pathStyle} onChange={(e) => setS3({ ...s3(), pathStyle: e.currentTarget.checked })} /> Path-style addressing
+            </label>
+            <span class="help">Most self-hosted services need it.</span>
+          </div>
+          <div class="field">
+            <label>
+              <input type="checkbox" checked={s3().allowHttp} onChange={(e) => setS3({ ...s3(), allowHttp: e.currentTarget.checked })} /> Allow plain http:// endpoints
+            </label>
+          </div>
+        </Drawer>
       </Show>
 
       <Show when={creating()}>

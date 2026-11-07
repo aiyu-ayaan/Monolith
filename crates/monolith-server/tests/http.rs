@@ -1881,3 +1881,39 @@ async fn storage_thumbnails_over_http() {
         (StatusCode::OK, true, "image/png")
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_backend_config_endpoint() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    let url = "/api/v1/apps/demo/storage/config";
+    assert_eq!(
+        t.call(Method::GET, url, None, false).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        t.call(Method::GET, url, None, true).await.body,
+        json!({"backend":"local","s3":null})
+    );
+    // Invalid S3 settings are rejected before anything is contacted, and the secret is never echoed.
+    let bad = t
+        .call(
+            Method::PUT,
+            url,
+            Some(json!({"backend":"s3","s3":{"bucket":"b","accessKeyId":"AK","secretAccessKey":"SECRET"}})),
+            true,
+        )
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "{:?}", bad.body);
+    assert!(!bad.body.to_string().contains("SECRET"));
+    let ok = t
+        .call(Method::PUT, url, Some(json!({"backend":"local"})), true)
+        .await;
+    assert_eq!(ok.status, StatusCode::OK);
+}

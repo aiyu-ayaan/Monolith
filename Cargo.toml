@@ -34,6 +34,9 @@ hmac = "0.13"
 sha2 = "0.11"
 blake3 = "1"
 infer = "0.19"
+object_store = { version = "0.12", default-features = false, features = ["aws"] }
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 fast_image_resize = { version = "5", features = ["image"] }
 getrandom = "0.3"

@@ -992,6 +992,43 @@ paths:
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
 
+  /api/v1/apps/{app}/storage/config:
+    parameters:
+      - $ref: "#/components/parameters/App"
+    get:
+      operationId: getStorageConfig
+      description: Where this app's file bytes live (superuser). The secret access key is never returned.
+      responses:
+        "200":
+          description: Config
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StorageConfig" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+    put:
+      operationId: putStorageConfig
+      description: |
+        Chooses `local` disk or an S3-compatible bucket for blob bytes (metadata and thumbnails stay on
+        local disk). An S3 config is checked first by writing, reading and deleting a probe object, so a
+        wrong key, region or endpoint is a 400 now rather than a failed upload later. Blobs are not
+        moved between backends: once the app holds files the location cannot change (409), only the
+        credentials. Omit `secretAccessKey` to keep the stored one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StorageConfigInput" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StorageConfig" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+
   /api/v1/apps/{app}/storage:gc:
     parameters:
       - $ref: "#/components/parameters/App"
@@ -1473,6 +1510,43 @@ components:
         bytes: { type: integer, description: Size of the database file (storage is not included) }
         created: { type: string, format: date-time }
         files: { type: boolean, description: "The backup also holds the app's storage buckets: a files.db snapshot plus hard links to the blobs, in b<ts>.files/ next to the database file" }
+
+    StorageConfigInput:
+      type: object
+      additionalProperties: false
+      required: [backend]
+      properties:
+        backend: { type: string, enum: [local, s3] }
+        s3:
+          type: object
+          additionalProperties: false
+          required: [bucket, accessKeyId]
+          properties:
+            bucket: { type: string }
+            region: { type: string, default: us-east-1 }
+            endpoint: { type: string, description: "For S3-compatible services (MinIO, R2, B2, Wasabi); omit for AWS" }
+            prefix: { type: string, description: Key prefix inside the bucket }
+            accessKeyId: { type: string }
+            secretAccessKey: { type: string, description: Omit to keep the stored secret }
+            allowHttp: { type: boolean, default: false }
+            pathStyle: { type: boolean, default: false, description: "https://host/bucket/key addressing; most self-hosted services need it" }
+
+    StorageConfig:
+      type: object
+      required: [backend]
+      properties:
+        backend: { type: string, enum: [local, s3] }
+        s3:
+          type: [object, "null"]
+          properties:
+            bucket: { type: string }
+            region: { type: string }
+            endpoint: { type: [string, "null"] }
+            prefix: { type: string }
+            accessKeyId: { type: string }
+            secretAccessKeySet: { type: boolean }
+            allowHttp: { type: boolean }
+            pathStyle: { type: boolean }
 
     BucketInput:
       type: object

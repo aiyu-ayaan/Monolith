@@ -481,6 +481,10 @@ pub fn router(reg: Arc<Registry>) -> Router {
         )
         .route("/api/v1/apps/{app}/storage:gc", post(storage_gc))
         .route(
+            "/api/v1/apps/{app}/storage/config",
+            get(get_storage_config).put(put_storage_config),
+        )
+        .route(
             "/api/v1/apps/{app}/buckets/{bucket}",
             get(get_bucket).put(replace_bucket).delete(delete_bucket),
         )
@@ -1447,6 +1451,25 @@ async fn delete_bucket(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+async fn get_storage_config(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(reg.storage_config(&app).await?).into_response())
+}
+
+async fn put_storage_config(
+    State(reg): St,
+    headers: HeaderMap,
+    Path(app): Path<String>,
+    body: Result<Bytes, BytesRejection>,
+) -> ApiResult<Response> {
+    require_su(&reg, &headers)?;
+    Ok(axum::Json(reg.put_storage_config(&app, parse_json(body)?).await?).into_response())
+}
+
 async fn storage_gc(
     State(reg): St,
     headers: HeaderMap,
@@ -1609,7 +1632,7 @@ async fn get_object(
         caller(&reg, &headers, &app)?.require("files:read", &bucket)?;
     }
     // `?thumb=100x100`: a cached or on-demand thumbnail of an image, in one of the bucket's sizes.
-    let (info, file) = match q.get("thumb") {
+    let (info, blob) = match q.get("thumb") {
         Some(spec) => files.thumbnail(&bucket, &key, spec).await?,
         None => files.open_object(&bucket, &key).await?,
     };
@@ -1653,7 +1676,7 @@ async fn get_object(
     let body = if method == axum::http::Method::HEAD {
         axum::body::Body::empty()
     } else {
-        file_body(file, offset, len)
+        axum::body::Body::from_stream(blob.read(offset, len).await?)
     };
     let mut res = Response::new(body);
     *res.status_mut() = status;

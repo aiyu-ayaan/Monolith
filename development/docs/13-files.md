@@ -86,10 +86,27 @@ Firebase-Storage style buckets, not yet the record-field files of §2–§5.
 - Control-plane and file-metadata writes use `Mutation.coll = NO_CHANGE_LOG` (`monolith-store`): same commit, but no `_changes`
   row, no `seq`, no bus event, so `files.db` and `system.db` do not grow a change log.
 - Data written by the first storage layout (`<bucket>/<id>` files, no counters) is migrated when the app's storage opens.
-- **Deviations from §2–§5:** local disk only; WebP/AVIF output is not produced (JPEG/PNG only); no eager generation at upload; thumbnails
+- **Deviations from §2–§5:** no presigned-URL redirects (S3 bytes are proxied); WebP/AVIF output is not produced (JPEG/PNG only); no eager generation at upload; thumbnails
   are not counted in quotas; a failed decode is not cached, so a broken image costs CPU on every request (bounded by the pool); no `_files`
   table (records have no file fields yet).
+- **Backends (§1):** per app, `local` disk (default) or any S3-compatible bucket (`GET|PUT /api/v1/apps/{app}/storage/config`,
+  Admin UI Storage page). Only blob bytes move: `files.db` (metadata, counters) and the thumbnail cache stay on local disk,
+  so listing, quota and thumbnails never wait on the network. Blobs are `blobs/<h[0..2]>/<hash>` under the configured
+  bucket and prefix, written once (a `HEAD` finds existing content, which is the dedupe), streamed in 8 MiB multipart parts
+  above 8 MiB, read with range requests, deleted when the last reference goes. Uploads reach the store before the metadata
+  commit and outside its lock; the commit re-checks and re-uploads if a concurrent delete reaped the blob in between.
+  Saving an S3 config writes, reads and deletes a probe object first. Implemented with the `object_store` crate.
+  - The secret access key is stored as plain JSON in `system.db` (like OAuth secrets; encryption at rest is Phase 3) and never returned.
+  - Blobs are not migrated between backends, so the location (local / bucket / prefix / endpoint) is locked once the app holds files;
+    credentials can change.
+  - Remote GC lists `blobs/` once (a flat listing) and compares it with the table. Thumbnails from a remote source fetch the image
+    into memory first (sources over 64 MiB are refused). A remote object read is `NotFound` if the store lost the blob.
+  - Backups of an S3-backed app hold the metadata only; the bytes stay in the bucket (use bucket versioning/replication). Restoring
+    into a new app gives metadata whose blobs exist only if that app is pointed at the same bucket and prefix.
+  - Deleting an app does not delete its bucket contents.
+  - Not verified against a real S3 service: the code path is tested with `object_store`'s in-memory store (`Registry::use_object_store`);
+    the AWS builder and signing come from the library. Presigned-URL redirects are not implemented (bytes are proxied).
 - Backups include storage (`docs/09`): `files.db` snapshot plus hard links to the blobs.
-- Not yet: S3 backend and presigned URLs, per-user/rule-based access (needs end-user auth), file fields on records,
+- Not yet: presigned URLs, per-user/rule-based access (needs end-user auth), file fields on records,
   per-app total quota, benchmarks (upload/download throughput and memory are unmeasured).
 - More gaps: `development/TODO.md` "Known limitations".

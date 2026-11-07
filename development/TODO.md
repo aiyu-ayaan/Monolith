@@ -120,7 +120,10 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Thumbnails (declared sizes, on demand, cached, bounded pool) (`docs/13 §6`)
 - [ ] Thumbnail follow-ups: WebP/AVIF output by `Accept`, eager generation at upload, cache negative results, include thumbnails in quotas, resize benchmark
 - [x] Files in backups (hard-linked blobs + `files.db` snapshot, restored into the new app)
-- [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, upload/download benchmark
+- [x] S3-compatible blob backend per app (`object_store`; config + probe + UI), tested against the in-memory store only
+- [ ] S3 follow-ups: run the suite against a real MinIO/S3 (needs the owner's OK and credentials), presigned-URL redirects, migrate blobs between
+      backends, encrypt the stored secret, bucket-lifecycle docs, remote-aware backups (versioning / copy)
+- [ ] Storage follow-ups: rule-based/per-user access, file fields on records, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
       `since` replay from `_changes`; WebSocket + channels; filtered and per-record topics; `fields`/`expand`; `leave` events;
@@ -166,8 +169,8 @@ API keys
 - Auth failures are not rate limited, so a flood of bad keys costs one SHA-256 each and nothing else.
 
 Storage
-- Local disk only. Backups include storage as hard links on the same disk (not a disaster-recovery copy; the download endpoint serves the
-  database file only). No per-user access or S3.
+- Blobs on local disk (default) or an S3-compatible bucket. Local backups are hard links on the same disk (not a disaster-recovery copy; the
+  download endpoint serves the database file only); S3-backed apps back up metadata only. No per-user access.
 - Dedupe is per app (never across apps), and only by whole-file hash: no chunk-level dedupe.
 - The reference counts can drift if the database is edited by hand or restored from a copy; `gc` fixes orphan files but does not
   recompute counts. Upload/download are not benchmarked.
@@ -186,6 +189,14 @@ Storage
 - Storage traffic is counted (object GET/HEAD as reads, PUT/DELETE as writes, with `Content-Length` as the byte count), but an upload
   sent with chunked encoding has no length up front, so its bytes in are 0 in the charts.
 - Not covered by tests: concurrent overwrite of one key, crash recovery, multi-range and `If-Range`, bucket delete during an upload.
+
+S3 backend
+- Verified only with `object_store`'s in-memory store. Nothing has run against AWS S3, MinIO, R2 or B2: signing, endpoint styles, multipart
+  limits and retry behaviour are the library's and untested here. Do not rely on it for production data before a real-service run.
+- The location is locked once files exist (no blob migration). Deleting an app leaves its bucket contents. Backups hold metadata only.
+- Every download is proxied through the server (no presigned redirects), so S3 egress and server bandwidth both count.
+- `object_store` retries failed requests with backoff, so a wrong endpoint can make the probe on save take a long time before it errors.
+- Thumbnails from a remote source download the whole image first (max 64 MiB). The secret key is stored unencrypted in `system.db`.
 
 Contract and SDKs (keys and storage)
 - No conformance vectors for scopes or object endpoints, no entries in `api/mcp/tools.json`, no TypeScript/Kotlin SDK methods,
