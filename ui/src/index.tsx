@@ -43,6 +43,9 @@ function Shell(props: RouteSectionProps) {
           <a href="#/settings" class="rail-btn" classList={{ active: isSettings() }} aria-label="Console settings" title="Console settings">
             <Icon name="gear" />
           </a>
+          <a href="http://localhost:5180" target="_blank" rel="noopener noreferrer" class="rail-btn" aria-label="Documentation" title="Documentation">
+            <Icon name="archive" />
+          </a>
           <UserMenu compact settingsHref="#/settings/users" />
         </nav>
         </Show>

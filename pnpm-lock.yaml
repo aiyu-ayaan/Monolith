@@ -166,6 +166,25 @@ importers:
 
   .: {}
 
+  docs-site:
+    dependencies:
+      '@solidjs/router':
+        specifier: ^1.0.1
+        version: 1.0.1(solid-js@1.9.18)
+      solid-js:
+        specifier: ^1.9.18
+        version: 1.9.18
+    devDependencies:
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+      vite:
+        specifier: ^8.3.6
+        version: 8.3.6(esbuild@0.28.2)
+      vite-plugin-solid:
+        specifier: ^2.11.15
+        version: 2.11.15(solid-js@1.9.18)(supports-color@10.2.2)(vite@8.3.6(esbuild@0.28.2))
+
   examples/web-typescript:
     dependencies:
       '@monolith/client':

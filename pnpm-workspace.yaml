@@ -2,5 +2,6 @@ packages:
   - 'ui'
   - 'sdks/typescript'
   - 'examples/web-typescript'
+  - 'docs-site'
 allowBuilds:
   esbuild: true

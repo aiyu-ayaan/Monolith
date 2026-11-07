@@ -1,0 +1,22 @@
+{
+  "name": "@monolith/docs",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Monolith documentation portal inspired by Google Cloud & Firebase Firestore",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 5180",
+    "build": "vite build",
+    "preview": "vite preview --port 5180",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "solid-js": "^1.9.18",
+    "@solidjs/router": "^1.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.3.6",
+    "vite-plugin-solid": "^2.11.15"
+  }
+}

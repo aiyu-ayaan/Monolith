@@ -187,6 +187,10 @@ export default function ProjectNav(p: {
       </nav>
 
       <footer class="side-foot">
+        <a class="nav-item" href="http://localhost:5180" target="_blank" rel="noopener noreferrer" title="Documentation">
+          <Icon name="archive" size={16} />
+          <span>Documentation ↗</span>
+        </a>
         <a class="nav-item" classList={{ active: at("/settings") }} href={`#${base()}/settings`} aria-current={at("/settings") ? "page" : undefined}>
           <Icon name="gear" size={16} />
           <span>Project settings</span>
