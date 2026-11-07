@@ -1,4 +1,7 @@
+import 'package:http/http.dart' as http_pkg;
+
 import 'auth.dart';
+import 'session_storage.dart';
 import 'collections.dart';
 import 'files.dart';
 import 'http.dart';
@@ -13,11 +16,20 @@ class MonolithClient {
   final Map<String, AuthService> _authServices = {};
   final Map<String, Collection<dynamic>> _collections = {};
 
-  MonolithClient(ClientOptions options) : this._shared(HttpClient(options));
+  MonolithClient(ClientOptions options)
+      : this._shared(HttpClient(options), options);
 
-  MonolithClient._shared(this.http)
+  MonolithClient._shared(this.http, ClientOptions options)
       : realtime = RealtimeService(http),
-        files = FilesService(http);
+        files = FilesService(http) {
+    // The app-user service is created first so its token hooks are installed on http.
+    _authServices['users'] = AuthService.configured(
+      http,
+      storage: options.storage,
+      redirectUri: options.redirectUri,
+      urlLauncher: options.urlLauncher,
+    );
+  }
 
   factory MonolithClient.fromOptions(ClientOptions options) =>
       MonolithClient(options);
@@ -73,6 +85,53 @@ class MonolithClient {
     }
     realtime.dispose();
     http.close();
+  }
+}
+
+/// Entry point with a ready client: `final mono = await Monolith.init(url: ..., app: ...)`.
+class Monolith {
+  Monolith._();
+
+  static final Map<String, Future<MonolithClient>> _instances = {};
+
+  /// Creates the client, restores the stored session and returns it. The same [url] and
+  /// [app] twice give the same instance (later options are ignored).
+  static Future<MonolithClient> init({
+    required String url,
+    String app = 'default',
+    SessionStorage? storage,
+    String? key,
+    String? redirectUri,
+    UrlLauncher? urlLauncher,
+    http_pkg.Client? client,
+    Map<String, String>? headers,
+  }) {
+    final id = '${url.replaceAll(RegExp(r'/+$'), '')}|$app';
+    return _instances.putIfAbsent(id, () async {
+      final c = MonolithClient(ClientOptions(
+        url: url,
+        app: app,
+        key: key,
+        client: client,
+        headers: headers,
+        storage: storage,
+        redirectUri: redirectUri,
+        urlLauncher: urlLauncher,
+      ));
+      await c.auth().restore();
+      return c;
+    });
+  }
+
+  /// Closes and forgets every instance made by [init] (tests, hot restart).
+  static Future<void> reset() async {
+    final all = _instances.values.toList();
+    _instances.clear();
+    for (final f in all) {
+      try {
+        (await f).close();
+      } catch (_) {}
+    }
   }
 }
 

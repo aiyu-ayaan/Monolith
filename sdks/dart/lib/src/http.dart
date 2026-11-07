@@ -5,6 +5,7 @@ import 'dart:math';
 import 'package:http/http.dart' as http;
 
 import 'errors.dart';
+import 'session_storage.dart';
 
 /// Configuration options for initializing a Monolith client.
 class ClientOptions {
@@ -16,6 +17,15 @@ class ClientOptions {
   final http.Client Function()? clientFactory;
   final Map<String, String>? headers;
 
+  /// Where the app-user session is kept (default: memory).
+  final SessionStorage? storage;
+
+  /// Redirect URI for provider sign-in (default `monolith-<app>://auth`).
+  final String? redirectUri;
+
+  /// Opens provider sign-in URLs. Injected so this package needs no platform code.
+  final Future<bool> Function(Uri url)? urlLauncher;
+
   const ClientOptions({
     required this.url,
     this.app = 'default',
@@ -24,6 +34,9 @@ class ClientOptions {
     this.client,
     this.clientFactory,
     this.headers,
+    this.storage,
+    this.redirectUri,
+    this.urlLauncher,
   });
 }
 
@@ -223,6 +236,14 @@ class HttpClient {
   String? _token;
   String? _apiKey;
 
+  /// Returns the app-user access token (refreshing it when close to expiry), or null when
+  /// there is no user session. Installed by the app-user [AuthService].
+  Future<String?> Function()? tokenResolver;
+
+  /// Called after a 401 on a request that used the session token. Returns true when a new
+  /// token is available and the request should be retried once.
+  Future<bool> Function()? onUnauthorized;
+
   HttpClient(ClientOptions options)
       : baseUrl = options.url.replaceAll(RegExp(r'/+$'), ''),
         app = options.app,
@@ -280,6 +301,7 @@ class HttpClient {
     return buildUri(path, query).toString();
   }
 
+  /// [refresh] false skips the session hooks (login, register, refresh, logout, providers).
   Future<T> request<T>(
     String method,
     String path, {
@@ -287,6 +309,45 @@ class HttpClient {
     Object? body,
     Map<String, String>? headers,
     T Function(dynamic)? decoder,
+    bool refresh = true,
+  }) async {
+    final explicit = headers != null &&
+        headers.keys.any((k) => k.toLowerCase() == 'authorization');
+    final resolver = tokenResolver;
+    final String? sessionToken =
+        (refresh && !explicit && resolver != null) ? await resolver() : null;
+    try {
+      return await _request<T>(method, path,
+          query: query,
+          body: body,
+          headers: headers,
+          decoder: decoder,
+          tokenOverride: sessionToken);
+    } on MonolithException catch (e) {
+      final retry = onUnauthorized;
+      if (e.status == 401 &&
+          sessionToken != null &&
+          retry != null &&
+          await retry()) {
+        return _request<T>(method, path,
+            query: query,
+            body: body,
+            headers: headers,
+            decoder: decoder,
+            tokenOverride: _token);
+      }
+      rethrow;
+    }
+  }
+
+  Future<T> _request<T>(
+    String method,
+    String path, {
+    Map<String, dynamic>? query,
+    Object? body,
+    Map<String, String>? headers,
+    T Function(dynamic)? decoder,
+    String? tokenOverride,
   }) async {
     final uri = buildUri(path, query);
     final reqHeaders = <String, String>{
@@ -294,7 +355,7 @@ class HttpClient {
       if (headers != null) ...headers,
     };
 
-    final authToken = _token ?? _apiKey;
+    final authToken = tokenOverride ?? _token ?? _apiKey;
     if (authToken != null &&
         !reqHeaders.containsKey('authorization') &&
         !reqHeaders.containsKey('Authorization')) {
