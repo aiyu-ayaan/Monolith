@@ -1322,3 +1322,51 @@ async fn collection_joins_and_back_relations_via_and_expand() {
         Err(CoreError::NotFound(_))
     ));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fields_projection_keeps_paging_and_trims_output() {
+    let (_dir, reg) = setup().await;
+    let app = reg.app("demo").await.unwrap();
+    for i in 0..9 {
+        let body =
+            json!({"title": format!("t{i}"), "status": "open", "priority": i % 3, "secret": "s"});
+        app.create_record(&su(), "tasks", body.to_string().as_bytes())
+            .await
+            .unwrap();
+    }
+    let list = |fields: Option<&str>, limit, cursor: Option<String>| {
+        let app = app.clone();
+        let lp = ListParams {
+            sort: "-priority,title".into(),
+            fields: fields.map(str::to_owned),
+            limit: Some(limit),
+            cursor,
+            ..Default::default()
+        };
+        async move { parse(&app.list_records(&su(), "tasks", &lp).await.unwrap()) }
+    };
+    let ids = |p: &J| -> Vec<J> {
+        p["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].clone())
+            .collect()
+    };
+    let want = ids(&list(None, 100, None).await);
+    let (mut got, mut cursor) = (Vec::new(), None);
+    loop {
+        let page = list(Some("title"), 4, cursor).await;
+        for r in page["items"].as_array().unwrap() {
+            let mut keys: Vec<_> = r.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            assert_eq!(keys, ["id", "title"]);
+        }
+        got.extend(ids(&page));
+        match page["next"].as_str() {
+            Some(c) => cursor = Some(c.to_owned()),
+            None => break,
+        }
+    }
+    assert_eq!(got, want);
+}

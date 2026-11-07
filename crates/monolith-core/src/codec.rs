@@ -100,28 +100,31 @@ pub fn write_record(
     su: bool,
     only: Option<&[usize]>,
 ) {
-    write_record_ext(out, c, row, su, only, &[], &[]);
+    write_record_ext(out, c, row, su, only, None, &[], &[]);
 }
 
 /// Writes one record object with optional multi-relation values (`(slot, ids)`) and
 /// pre-encoded `expand` entries (`(field_name, json_bytes)`).
+/// When `projected` is `Some(slots)`, each element in `row` corresponds to `slots[i]`.
+#[allow(clippy::too_many_arguments)]
 pub fn write_record_ext(
     out: &mut Vec<u8>,
     c: &Collection,
     row: &[Value],
     su: bool,
     only: Option<&[usize]>,
+    projected: Option<&[usize]>,
     multi_rels: &[(usize, &[Id])],
     expand: &[(&str, &[u8])],
 ) {
     out.push(b'{');
     let mut first = true;
-    for (slot, v) in row.iter().enumerate() {
+    let mut emit_slot = |out: &mut Vec<u8>, slot: usize, v: &Value| {
         let f = c.field_at(slot);
         if f.is_some_and(|f| f.hidden && !su)
             || only.is_some_and(|o| slot != 0 && !o.contains(&slot))
         {
-            continue;
+            return;
         }
         if !first {
             out.push(b',');
@@ -143,7 +146,7 @@ pub fn write_record_ext(
                 out.push(b'"');
             }
             out.push(b']');
-            continue;
+            return;
         }
         let kind = match slot {
             0 => Some(FieldType::Relation), // ids encode like relations
@@ -151,7 +154,21 @@ pub fn write_record_ext(
             _ => f.map(|f| f.kind),
         };
         write_value(out, kind, v);
+    };
+
+    match projected {
+        Some(slots) => {
+            for (&slot, v) in slots.iter().zip(row.iter()) {
+                emit_slot(out, slot, v);
+            }
+        }
+        None => {
+            for (slot, v) in row.iter().enumerate() {
+                emit_slot(out, slot, v);
+            }
+        }
     }
+
     if !expand.is_empty() {
         if !first {
             out.push(b',');

@@ -127,7 +127,15 @@ pub struct BatchItem<'a> {
     pub body: Option<&'a [u8]>,
 }
 
-type PlanKey = (u64, String, bool, String, String, Option<u32>);
+type PlanKey = (
+    u64,
+    String,
+    bool,
+    String,
+    String,
+    Option<Vec<usize>>,
+    Option<u32>,
+);
 type ExpandMaps = Vec<(HashMap<Id, Vec<u8>>, Option<HashMap<Id, Vec<Id>>>)>;
 
 pub struct App {
@@ -1033,6 +1041,7 @@ impl App {
                         tr,
                         p.superuser,
                         None,
+                        None,
                         &tr_multi,
                         &child_exp,
                     );
@@ -1067,7 +1076,7 @@ impl App {
         let row_exp: Vec<(&str, &[u8])> =
             row_owned.iter().map(|(k, v)| (*k, v.as_slice())).collect();
         let mut json = Vec::with_capacity(256);
-        codec::write_record_ext(&mut json, c, row, p.superuser, only, &rm, &row_exp);
+        codec::write_record_ext(&mut json, c, row, p.superuser, only, None, &rm, &row_exp);
         Ok(RecordOut {
             json,
             version: row_version(row),
@@ -1333,6 +1342,7 @@ impl App {
         schema: &Schema,
         c: &Collection,
         lp: &ListParams,
+        fields: Option<&[usize]>,
         nulls: Option<u32>,
         su: bool,
     ) -> CoreResult<Arc<ListPlan>> {
@@ -1342,6 +1352,7 @@ impl App {
             su,
             lp.filter.clone(),
             lp.sort.clone(),
+            fields.map(<[usize]>::to_vec),
             nulls,
         );
         if let Some(plan) = self
@@ -1352,7 +1363,9 @@ impl App {
         {
             return Ok(plan.clone());
         }
-        let plan = Arc::new(list::plan(schema, c, &lp.filter, &lp.sort, nulls, su)?);
+        let plan = Arc::new(list::plan(
+            schema, c, &lp.filter, &lp.sort, fields, nulls, su,
+        )?);
         let mut cache = self.plans.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() >= PLAN_CACHE {
             cache.clear();
@@ -1378,7 +1391,13 @@ impl App {
         }
         let only = parse_fields(c, lp.fields.as_deref(), su)?;
         let expand_nodes = parse_expand(&schema, c, lp.expand.as_deref(), su)?;
-        let base = self.list_plan(&schema, c, lp, None, su)?;
+        // Expand reads relation slots by position, so it keeps the full column list.
+        let proj = if expand_nodes.is_empty() {
+            only.as_deref()
+        } else {
+            None
+        };
+        let base = self.list_plan(&schema, c, lp, proj, None, su)?;
         let hash = list::shape_hash(&[coll, &lp.filter, &lp.sort, if su { "su" } else { "" }]);
         let (plan, cursor) = match &lp.cursor {
             None => (base, vec![]),
@@ -1388,7 +1407,7 @@ impl App {
                     .iter()
                     .enumerate()
                     .fold(0u32, |m, (i, v)| m | u32::from(*v == Value::Null) << i);
-                (self.list_plan(&schema, c, lp, Some(nulls), su)?, vals)
+                (self.list_plan(&schema, c, lp, proj, Some(nulls), su)?, vals)
             }
         };
         let now = now_us();
@@ -1434,12 +1453,25 @@ impl App {
             let row_owned = build_row_expand(row, &multi_maps, &expand_nodes, &exp_maps);
             let row_exp: Vec<(&str, &[u8])> =
                 row_owned.iter().map(|(k, v)| (*k, v.as_slice())).collect();
-            codec::write_record_ext(&mut out, c, row, su, only.as_deref(), &rm, &row_exp);
+            codec::write_record_ext(
+                &mut out,
+                c,
+                row,
+                su,
+                only.as_deref(),
+                plan.projected_slots.as_deref(),
+                &rm,
+                &row_exp,
+            );
         }
         out.extend_from_slice(b"],\"next\":");
         match rows.last().filter(|_| more) {
             Some(last) => {
-                let vals: Vec<&Value> = plan.sort.iter().map(|k| &last[k.slot]).collect();
+                let vals: Vec<&Value> = plan
+                    .sort
+                    .iter()
+                    .map(|k| &last[plan.row_index(k.slot)])
+                    .collect();
                 codec::write_str(&mut out, &list::encode_cursor(hash, &vals));
             }
             None => out.extend_from_slice(b"null"),

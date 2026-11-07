@@ -176,7 +176,15 @@ impl App {
     pub async fn explain_query(&self, req: ExplainQueryReq) -> CoreResult<ExplainQueryResp> {
         let schema = self.schema();
         let c = schema.get(&req.collection)?;
-        let plan = list::plan(&schema, c, &req.filter, &req.sort, None, req.superuser)?;
+        let plan = list::plan(
+            &schema,
+            c,
+            &req.filter,
+            &req.sort,
+            None,
+            None,
+            req.superuser,
+        )?;
         let mut n_binds = 1; // LIMIT ?
         if !req.superuser
             && let Some(r) = &c.rules.list

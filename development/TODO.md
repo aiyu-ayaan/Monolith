@@ -97,8 +97,8 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] `@collection.<name>(:<alias>)?.<path>` cross-collection joins (up to 4 aliases, shared within `&&` scopes)
       and `<coll>_via_<field>` back-relations (over both single and multi relations) in rules, filters, and `expand`
 - [x] `@request.body.<field>:isset` and `@request.body.<field>:changed` write-rule modifiers (with bitmask tracking in `Body` and `rules:explain`)
-- [ ] Remaining Phase 1 follow-ups: `fields` projection in SQL (now done at encode),
-      superuser TOTP + token revocation, docs/api/rest.md + rules.md, precompressed UI assets (brotli/gzip),
+- [x] `fields` projection pushed into list SQL (system cols + sort keys kept for cursors; `expand` keeps full columns)
+- [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md, precompressed UI assets (brotli/gzip),
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
 - [ ] Phase 1 exit: M1–M6 gates, ported PocketBase rules vectors
 

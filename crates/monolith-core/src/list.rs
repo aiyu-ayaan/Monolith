@@ -62,7 +62,7 @@ pub fn parse_sort(c: &Collection, s: &str, su: bool) -> CoreResult<Vec<SortKey>>
     Ok(keys)
 }
 
-/// SQL for one list shape; cached per (schema version, collection, filter, sort, cursor nulls).
+/// SQL for one list shape; cached per (schema version, collection, filter, sort, fields, cursor nulls).
 #[derive(Debug)]
 pub struct ListPlan {
     pub sql: Arc<str>,
@@ -70,6 +70,17 @@ pub struct ListPlan {
     pub sort: Vec<SortKey>,
     /// Cursor value index for each keyset `?`, in SQL order.
     pub keyset_binds: Vec<usize>,
+    /// Projected slots in SQL order. `None` = all collection columns in default slot order.
+    pub projected_slots: Option<Vec<usize>>,
+}
+
+impl ListPlan {
+    pub fn row_index(&self, slot: usize) -> usize {
+        match &self.projected_slots {
+            Some(slots) => slots.iter().position(|&s| s == slot).unwrap_or(slot),
+            None => slot,
+        }
+    }
 }
 
 /// `nulls`: `None` without a cursor, else bit i set when cursor value i is NULL.
@@ -78,6 +89,7 @@ pub fn plan(
     c: &Collection,
     filter: &str,
     sort: &str,
+    fields: Option<&[usize]>,
     nulls: Option<u32>,
     su: bool,
 ) -> CoreResult<ListPlan> {
@@ -148,11 +160,48 @@ pub fn plan(
         .map(|k| format!("t.\"{}\"{}", k.column, if k.desc { " DESC" } else { "" }))
         .collect::<Vec<_>>()
         .join(", ");
+
+    let (cols_sql, projected_slots) = match fields {
+        None => (c.sql.cols.clone(), None),
+        Some(req_slots) => {
+            let mut slots = Vec::new();
+            slots.extend_from_slice(req_slots);
+            // System columns required internally: id (0), updated (2), _v (3)
+            slots.push(0);
+            slots.push(2);
+            slots.push(3);
+            for k in &sort {
+                slots.push(k.slot);
+            }
+            slots.sort_unstable();
+            slots.dedup();
+
+            let cols = slots
+                .iter()
+                .map(|&s| match s {
+                    0 => "\"id\"".to_string(),
+                    1 => "\"created\"".to_string(),
+                    2 => "\"updated\"".to_string(),
+                    3 => "\"_v\"".to_string(),
+                    _ => {
+                        let f = c.field_at(s).expect("valid slot");
+                        if f.is_multi_rel() {
+                            format!("NULL AS \"{}\"", f.name)
+                        } else {
+                            format!("\"{}\"", f.name)
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            (cols, Some(slots))
+        }
+    };
+
     let mut sql = String::new();
     let _ = write!(
         sql,
-        "SELECT {} FROM \"{}\" AS t WHERE ({rule}) AND ({}) AND ({keyset}) ORDER BY {order} LIMIT ?",
-        c.sql.cols,
+        "SELECT {cols_sql} FROM \"{}\" AS t WHERE ({rule}) AND ({}) AND ({keyset}) ORDER BY {order} LIMIT ?",
         c.def.name,
         filter.as_ref().map_or("1", |f| f.sql.as_str()),
     );
@@ -161,6 +210,7 @@ pub fn plan(
         filter,
         sort,
         keyset_binds,
+        projected_slots,
     })
 }
 
@@ -282,5 +332,33 @@ mod tests {
         assert!(decode_cursor(&c, 7, 4).is_err(), "trailing bytes");
         assert!(decode_cursor(&c[..c.len() - 2], 7, 5).is_err(), "truncated");
         assert!(decode_cursor("zz", 7, 0).is_err());
+    }
+
+    #[test]
+    fn plan_projection_pushes_down_fields() {
+        let def: crate::schema::CollectionDef = serde_json::from_value(serde_json::json!({
+            "name": "posts",
+            "fields": [
+                {"name": "title", "type": "text"},
+                {"name": "body", "type": "text"},
+                {"name": "priority", "type": "number"},
+            ],
+            "rules": {"list": ""}
+        }))
+        .unwrap();
+        let schema =
+            crate::schema::Schema::build(1, [("posts".to_owned(), (1, def))].into()).unwrap();
+        let c = schema.get("posts").unwrap();
+        // Request only 'title' (slot 4), sort by '-priority' (slot 6)
+        let p = plan(&schema, c, "", "-priority", Some(&[4]), None, true).unwrap();
+        assert_eq!(p.projected_slots, Some(vec![0, 2, 3, 4, 6]));
+        assert!(p.sql.starts_with(
+            "SELECT \"id\", \"updated\", \"_v\", \"title\", \"priority\" FROM \"posts\" AS t"
+        ));
+        assert_eq!(p.row_index(0), 0); // id
+        assert_eq!(p.row_index(2), 1); // updated
+        assert_eq!(p.row_index(3), 2); // _v
+        assert_eq!(p.row_index(4), 3); // title
+        assert_eq!(p.row_index(6), 4); // priority
     }
 }
