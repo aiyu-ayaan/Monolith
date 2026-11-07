@@ -13,6 +13,7 @@ import Auth from "./pages/Auth";
 import Logs from "./pages/Logs";
 import Rules from "./pages/Rules";
 import Realtime from "./pages/Realtime";
+import Backups from "./pages/Backups";
 import "./styles.css";
 
 function Shell(props: RouteSectionProps) {
@@ -62,6 +63,7 @@ render(
             <Route path="/logs" component={Logs} />
             <Route path="/rules" component={Rules} />
             <Route path="/realtime" component={Realtime} />
+            <Route path="/backups" component={Backups} />
             <Route path="/c/:coll" component={Records} />
           </Route>
         </Route>

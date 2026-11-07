@@ -246,3 +246,9 @@ export interface AuthProviderInput {
   clientSecret?: string;
   extra: Record<string, string>;
 }
+
+export interface Backup {
+  name: string;
+  bytes: number;
+  created: string;
+}
