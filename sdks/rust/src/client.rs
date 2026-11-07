@@ -1,7 +1,9 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{
+    ACCEPT, AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue,
+};
 use reqwest::{Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -72,6 +74,9 @@ struct ClientInner {
     base_url: Url,
     app: String,
     http: reqwest::Client,
+    /// No total timeout: SSE responses stay open indefinitely.
+    sse_http: reqwest::Client,
+    realtime_backoff: (Duration, Duration),
     token: RwLock<Option<String>>,
     api_key: RwLock<Option<String>>,
     custom_headers: HeaderMap,
@@ -85,6 +90,7 @@ pub struct ClientBuilder {
     api_key: Option<String>,
     custom_headers: HeaderMap,
     timeout: Option<Duration>,
+    realtime_backoff: (Duration, Duration),
 }
 
 impl ClientBuilder {
@@ -96,6 +102,7 @@ impl ClientBuilder {
             api_key: None,
             custom_headers: HeaderMap::new(),
             timeout: None,
+            realtime_backoff: (Duration::from_millis(500), Duration::from_secs(15)),
         }
     }
 
@@ -133,6 +140,13 @@ impl ClientBuilder {
         self
     }
 
+    /// Realtime reconnect backoff: first delay `base`, doubling per failed attempt up to `max`
+    /// (plus jitter). Defaults to 500 ms and 15 s.
+    pub fn realtime_backoff(mut self, base: Duration, max: Duration) -> Self {
+        self.realtime_backoff = (base, max);
+        self
+    }
+
     pub fn build(self) -> Result<Client> {
         let mut raw_url = self.base_url.trim().to_string();
         if !raw_url.ends_with('/') {
@@ -145,11 +159,16 @@ impl ClientBuilder {
             req_builder = req_builder.timeout(t);
         }
         let http = req_builder.build()?;
+        let sse_http = reqwest::Client::builder()
+            .connect_timeout(self.timeout.unwrap_or(Duration::from_secs(10)))
+            .build()?;
 
         let inner = ClientInner {
             base_url: parsed_url,
             app: self.app,
             http,
+            sse_http,
+            realtime_backoff: self.realtime_backoff,
             token: RwLock::new(self.token),
             api_key: RwLock::new(self.api_key),
             custom_headers: self.custom_headers,
@@ -265,6 +284,25 @@ impl Client {
             }
         }
         Ok(u)
+    }
+
+    pub(crate) fn realtime_backoff(&self) -> (Duration, Duration) {
+        self.inner.realtime_backoff
+    }
+
+    /// Opens an SSE response (`GET url`, `Accept: text/event-stream`) without a total timeout.
+    pub(crate) async fn open_sse(&self, url: Url) -> Result<reqwest::Response> {
+        let mut req = reqwest::Request::new(Method::GET, url);
+        req.headers_mut()
+            .insert(ACCEPT, HeaderValue::from_static("text/event-stream"));
+        req.headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        self.apply_headers(&mut req);
+        let res = self.inner.sse_http.execute(req).await?;
+        if !res.status().is_success() {
+            return self.handle_error_response(res).await;
+        }
+        Ok(res)
     }
 
     fn apply_headers(&self, req: &mut reqwest::Request) {

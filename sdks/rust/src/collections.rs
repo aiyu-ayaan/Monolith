@@ -140,8 +140,8 @@ pub struct CountResult {
 /// Client for interacting with a specific collection's records.
 #[derive(Clone)]
 pub struct Collection<T = Record> {
-    client: Client,
-    name: String,
+    pub(crate) client: Client,
+    pub(crate) name: String,
     _marker: PhantomData<fn() -> T>,
 }
 

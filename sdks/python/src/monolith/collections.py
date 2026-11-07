@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import urllib.parse
-from typing import Any, Generic, TypeVar
+from typing import Any, Callable, Generic, TypeVar
 
 from monolith.http import CountOptions, HttpClient, ListOptions, ListResult
+from monolith.realtime import QuerySnapshot, RealtimeEvent, RealtimeService, Unsubscribe
 
 T = TypeVar("T")
 
 
 class Collection(Generic[T]):
-    def __init__(self, name: str, http: HttpClient) -> None:
+    def __init__(
+        self, name: str, http: HttpClient, realtime: RealtimeService | None = None
+    ) -> None:
         self.name = name
         self._http = http
+        # Without a client-owned service this collection gets its own (no connection sharing).
+        self._realtime = realtime or RealtimeService(http)
 
     @property
     def base_path(self) -> str:
@@ -173,3 +178,40 @@ class Collection(Generic[T]):
         if isinstance(res, dict):
             return int(res.get("count", 0))
         return 0
+
+    def subscribe(
+        self,
+        listener: Callable[[RealtimeEvent], None],
+        *,
+        filter: str | None = None,
+        ids: list[str] | None = None,
+    ) -> Unsubscribe:
+        """Live events (create/update/delete/leave). Returns the unsubscribe function.
+
+        `filter`/`ids` open a dedicated connection; plain subscriptions share one.
+        """
+        return self._realtime.subscribe(self.name, listener, filter=filter, ids=ids)
+
+    def on_snapshot(
+        self,
+        callback: Callable[[QuerySnapshot], None],
+        *,
+        filter: str | None = None,
+        sort: str | None = None,
+        limit: int | None = None,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> Unsubscribe:
+        """Calls back with the current result set, then after every change that affects it."""
+        return self._realtime.on_snapshot(
+            self.name, callback, filter=filter, sort=sort, limit=limit, on_error=on_error
+        )
+
+    def on_doc_snapshot(
+        self,
+        id: str,
+        callback: Callable[[dict[str, Any] | None], None],
+        *,
+        on_error: Callable[[Exception], None] | None = None,
+    ) -> Unsubscribe:
+        """Listens to one record: the record, or None once deleted or no longer visible."""
+        return self._realtime.on_doc_snapshot(self.name, id, callback, on_error=on_error)

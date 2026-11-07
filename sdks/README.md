@@ -33,13 +33,13 @@ Detailed breakdown of capabilities implemented across the official client SDKs:
 | | On-demand thumbnails (`?thumb=WxH`) | [x] | [x] | [x] | [x] | [x] | [ ] |
 | | Object deletion (`delete()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
 | | Bucket object listing (`list()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
-| **Realtime** | Multiplexed SSE connection | [x] | [x] | [x] | Planned | Planned | [ ] |
-| | Per-collection subscription (`subscribe()`) | [x] | [x] | [x] | Planned | Planned | [ ] |
-| | Reconnection with exponential backoff & jitter | [x] | [x] | [x] | Planned | Planned | [ ] |
-| | Automatic connection lifecycle (ref-counted) | [x] | [x] | [x] | Planned | Planned | [ ] |
-| | Filtered / per-record subscription (`filter`, `ids`) | [x] | [x] | [x] | Planned | Planned | [ ] |
-| | Snapshot listener (`onSnapshot`, `onDocSnapshot`) | [x] | [x] (Flow) | [x] (Stream) | Planned | Planned | [ ] |
-| | Gap-free resume after reconnect (`since`) and `leave` events | [x] | [x] | [x] | Planned | Planned | [ ] |
+| **Realtime** | Multiplexed SSE connection | [x] | [x] | [x] | [x] | per-subscription | [ ] |
+| | Per-collection subscription (`subscribe()`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Reconnection with exponential backoff & jitter | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Automatic connection lifecycle (ref-counted) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Filtered / per-record subscription (`filter`, `ids`) | [x] | [x] | [x] | [x] | [x] | [ ] |
+| | Snapshot listener (`onSnapshot`, `onDocSnapshot`) | [x] | [x] (Flow) | [x] (Stream) | [x] (callback) | [x] (Stream) | [ ] |
+| | Gap-free resume after reconnect (`since`) and `leave` events | [x] | [x] | [x] | [x] | [x] | [ ] |
 | **Analytics** | Event tracking (`track()`) | [x] | [x] | [x] | [x] | Planned | [ ] |
 | | In-memory queue buffering | [x] | [x] | [x] | [x] | Planned | [ ] |
 | | Periodic interval flush | [x] | [x] | [x] | [x] | Planned | [ ] |

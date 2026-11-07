@@ -96,6 +96,10 @@ pub enum Error {
 
     #[error("Configuration error: {0}")]
     Config(String),
+
+    /// An `error` event sent by the realtime stream.
+    #[error("Realtime error: {0}")]
+    Realtime(String),
 }
 
 impl Error {

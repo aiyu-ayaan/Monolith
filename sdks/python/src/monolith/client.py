@@ -7,6 +7,7 @@ from monolith.analytics import AnalyticsService
 from monolith.auth import AuthService
 from monolith.collections import Collection
 from monolith.files import FilesService
+from monolith.realtime import RealtimeService
 from monolith.http import (
     BatchOperation,
     BatchResponseItem,
@@ -44,6 +45,7 @@ class MonolithClient:
         self.http = HttpClient(options)
         self.files = FilesService(self.http)
         self.analytics = AnalyticsService(self.http)
+        self.realtime = RealtimeService(self.http)
         self._auth_services: dict[str, AuthService] = {}
         self._collections: dict[str, Collection[Any]] = {}
 
@@ -54,7 +56,7 @@ class MonolithClient:
 
     def collection(self, name: str) -> Collection[Any]:
         if name not in self._collections:
-            self._collections[name] = Collection(name, self.http)
+            self._collections[name] = Collection(name, self.http, self.realtime)
         return self._collections[name]
 
     def batch(self, operations: list[dict[str, Any] | BatchOperation]) -> list[Any]:
@@ -74,6 +76,7 @@ class MonolithClient:
         return []
 
     def close(self) -> None:
+        self.realtime.close()
         self.analytics.close()
         self.http.close()
 

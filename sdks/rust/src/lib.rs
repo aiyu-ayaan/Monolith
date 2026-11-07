@@ -30,6 +30,7 @@ pub mod client;
 pub mod collections;
 pub mod errors;
 pub mod files;
+pub mod realtime;
 
 pub use auth::{AuthService, AuthSession};
 /// Alias for [`AuthService`].
@@ -39,3 +40,7 @@ pub use client::{BatchOp, BatchResponse, BatchResultItem, Client, ClientBuilder}
 pub use collections::{Collection, CountResult, ListOptions, ListResult, Record};
 pub use errors::{Error, FieldProblem, Problem, Result};
 pub use files::{FilesService, ObjectInfo, ObjectPage};
+pub use realtime::{
+    ChangeType, DocumentChange, QuerySnapshot, RealtimeAction, RealtimeEvent, SnapshotOptions,
+    SubscribeOptions, Subscription,
+};

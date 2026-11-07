@@ -6,6 +6,7 @@ from monolith.client import MonolithClient, create_client
 from monolith.collections import Collection
 from monolith.errors import FieldProblem, MonolithError, Problem
 from monolith.files import FilesService
+from monolith.realtime import DocumentChange, QuerySnapshot, RealtimeEvent, RealtimeService
 from monolith.http import (
     BatchOperation,
     BatchResponseItem,
@@ -40,5 +41,9 @@ __all__ = [
     "StorageListOptions",
     "StorageListResult",
     "StorageObject",
+    "DocumentChange",
+    "QuerySnapshot",
+    "RealtimeEvent",
+    "RealtimeService",
     "create_client",
 ]
