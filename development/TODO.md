@@ -103,16 +103,53 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Per-app Authentication (Firebase-style): `GET|PUT /api/v1/apps/{app}/auth/config` (email/password + 11 OAuth/OIDC providers,
       write-only secrets, stored in system.db), Admin UI Authentication page (provider list, add/edit/remove, redirect URI)
 - [x] Admin UI dashboards: landing = server tiles + per-app cards + traffic charts; project overview = tiles, collections, sign-in status, charts
-- [x] Realtime v1 (SSE, whole-collection topics, per-audience encode, bounded queues, shutdown close); see `docs/07 §9`. Still to do:
-      WebSocket + channels, filtered/record topics, `since` replay, row capture in the writer (deletes), benchmark S7
-- [x] Backups v1 (manual snapshot, list, download, delete, restore into a new app; docs/09 'Implemented today'). Still: schedule + retention, zstd, S3, WAL shipping, in-place restore, CLI
+- [x] Realtime v1 (SSE, whole-collection topics, per-audience encode, bounded queues, shutdown close); see `docs/07 §9`
+- [x] Backups v1 (manual snapshot, list, download, delete, restore into a new app); see `docs/09` "Implemented today"
 - [x] Admin UI: Logs, Access rules, Realtime monitor and Backups pages (sidebar items that stay 'Soon': Storage, API keys, Offline sync, Webhooks, Plugins)
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
+- [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
+      `since` replay from `_changes`; WebSocket + channels; filtered and per-record topics; `fields`/`expand`; `leave` events;
+      relational view rules via the batched SQL check (`docs/07 §5`); benchmark S7; micro-benchmarks for the hub (`CLAUDE.md`: realtime needs them)
+- [ ] Backups follow-ups: schedule + retention (`docs/09` B2), zstd archive, S3 target, WAL shipping, in-place restore, files in the archive,
+      `monolith backup` CLI, encryption (B4), streamed download without buffering in the admin UI
+- [ ] Sidebar items still marked "Soon": Storage (files, `docs/13`), API keys (`docs/08`), Offline sync (`docs/09` part A),
+      Webhooks and Plugins (`docs/14`; webhooks need an HTTP client, plugins a WASM runtime)
+- [ ] Rules follow-ups: `:length` and `:each` modifiers, `~` with a field on the right side, `@request.query.*`, `@request.key.*`
 - [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md,
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
 - [x] Ported PocketBase rules vectors (`api/conformance/vectors/rules.json`, run by `crates/monolith-core/tests/rules_vectors.rs`);
       fixed `''`≡NULL on text, `%` wildcards in `~`, added date/number macros; `known_gaps`: `:length`/`:each`, `~` with a field on the right
 - [ ] Phase 1 exit: M1–M6 gates (need owner OK to run benchmarks)
+
+## Known limitations of what shipped (read before relying on it)
+
+Authentication (per app)
+- Configuration only: there are no end-user accounts, password login, user tokens or OAuth redirects yet, so nobody can sign in.
+- Client secrets are stored as plain JSON in `system.db` (encryption at rest is Phase 3). They are never returned by the API.
+- The redirect URI shown in the UI uses the browser's current origin; register your public URL in production.
+
+Realtime (SSE)
+- Whole-collection topics over SSE only; no WebSocket, channels, filters, `since` replay (clients refetch after reconnect).
+- An event holds the row as it is at dispatch time, so quick writes to one row can arrive as one event.
+- Non-superusers get `delete` events only when the view rule is public, and cannot subscribe when the view rule is relational.
+- A client 256 frames behind is dropped. Not benchmarked: scenario S7 and the 50k-connection target are unmeasured.
+- Per-event cost: one `bind` + in-memory rule check per subscriber (not cached per audience yet).
+
+Backups
+- Manual only, plain SQLite files, same disk as the data (not a disaster-recovery copy until S3 or an off-volume target exists).
+- Restore creates a new app; there is no in-place restore. Backups survive deleting the app. Admin UI download buffers the file in the browser.
+
+Rules engine
+- Known gaps in `api/conformance/vectors/rules.json` (`:length`, `:each`, field-valued `~`).
+- Behaviour changed to match PocketBase: text `''` equals NULL for `=`/`!=`; `~` with an unescaped `%` is used as the LIKE pattern as written.
+
+Admin UI
+- Sidebar entries marked "Soon" do not link anywhere. The UI is not covered by automated tests; only typecheck and manual checks.
+- No keyboard focus trap in drawers; no sidebar collapse; no Settings page.
+
+Testing and performance
+- None of the new code is benchmarked. Phase 1 gates M1–M6 and the Phase 0 bake-off are still pending the owner's OK to run on the host.
+- `pnpm test` fails on a machine without installed JS dependencies (`vitest: not found` in `sdks/typescript`); run `pnpm install` first.
 
 ## Later phases (see `docs/20-roadmap.md`)
 
