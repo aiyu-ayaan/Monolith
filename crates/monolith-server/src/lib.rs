@@ -162,6 +162,11 @@ fn classify<'a>(method: &axum::http::Method, rest: &'a str) -> (ReqKind, Option<
     let coll = match (first, seg.next(), seg.next()) {
         ("collections", Some(c), Some(r)) if r.starts_with("records") => c,
         ("batch", None, None) => return (ReqKind::Write, None),
+        // Object transfers count as reads and writes of no collection; bucket admin stays "other".
+        ("buckets", Some(_), Some("objects")) => {
+            let read = matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
+            return (if read { ReqKind::Read } else { ReqKind::Write }, None);
+        }
         _ => return (ReqKind::Other, None),
     };
     let read = matches!(*method, axum::http::Method::GET | axum::http::Method::HEAD);
@@ -205,7 +210,16 @@ async fn request_id(State(reg): St, mut req: Request, next: Next) -> Response {
     let duration_us = start.elapsed().as_micros() as u64;
     let status = res.status().as_u16();
     tracing::debug!(request_id = %rid, %method, %path, status, us = duration_us);
-    let bytes_out = res.body().size_hint().exact().unwrap_or(0);
+    // Streamed bodies (object downloads) have no exact hint; their Content-Length says what is sent.
+    let bytes_out = res.body().size_hint().exact().unwrap_or_else(|| {
+        if method == axum::http::Method::HEAD {
+            return 0;
+        }
+        res.headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok()?.parse::<u64>().ok())
+            .unwrap_or(0)
+    });
     let rest = app_name
         .as_deref()
         .and_then(|a| {

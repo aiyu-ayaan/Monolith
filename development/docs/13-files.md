@@ -72,6 +72,8 @@ Firebase-Storage style buckets, not yet the record-field files of §2–§5.
   `files/.tmp` is emptied at open.
 - Access: private bucket needs a superuser token or a key with `files:read[:bucket]`; public buckets are readable
   by key without credentials but never listable; writes need `files:write[:bucket]`. Keys cannot manage buckets.
+- Traffic: object GET/HEAD count as reads and PUT/DELETE as writes in the per-app traffic metrics, with `Content-Length` as the
+  byte count (a chunked upload has none, so its bytes in are not counted).
 - Download: `ETag` + `If-None-Match`, single `Range`, `nosniff`, `Content-Security-Policy: sandbox`; only images
   (not SVG), audio, video, PDF and plain text are `inline`, everything else is `attachment`.
 - Control-plane and file-metadata writes use `Mutation.coll = NO_CHANGE_LOG` (`monolith-store`): same commit, but no `_changes`

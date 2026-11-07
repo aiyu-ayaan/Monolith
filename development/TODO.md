@@ -112,7 +112,7 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [ ] API keys follow-ups: `@request.key.*` in rules, publishable keys, rate limit for failed auth, remaining scopes (`users:manage`, `analytics:*`, `schema:*`, `backup:run`, `mcp`), `monolith keys` CLI
 - [x] Storage internals: BLAKE3 content addressing + dedupe, reference counts, bucket quota, usage counters, orphan GC,
       MIME sniffing, migration of the first layout (`docs/13 §6`)
-- [ ] Key/storage hardening (from the known limitations): per-app quota, storage bytes in HTTP metrics, conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
+- [ ] Key/storage hardening (from the known limitations): per-app quota, conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
 - [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, thumbnails, files in backups, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
@@ -175,8 +175,8 @@ Storage
   `Cache-Control` is `no-cache` (always revalidates); no immutable caching because keys are mutable names.
 - Upload answers 201 vs 200 by comparing `created` and `updated`, which could misreport a replace within the same microsecond.
 - Object keys containing `%2F` are decoded to `/` by the router before validation; there is no way to store a literal `%2F`.
-- HTTP metrics count storage requests as `other`; streamed uploads and downloads report 0 bytes in/out because the size is not
-  known up front (only `Content-Length` is read), so the traffic charts under-count storage.
+- Storage traffic is counted (object GET/HEAD as reads, PUT/DELETE as writes, with `Content-Length` as the byte count), but an upload
+  sent with chunked encoding has no length up front, so its bytes in are 0 in the charts.
 - Not covered by tests: concurrent overwrite of one key, crash recovery, multi-range and `If-Range`, bucket delete during an upload.
 
 Contract and SDKs (keys and storage)

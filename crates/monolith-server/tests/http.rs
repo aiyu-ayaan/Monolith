@@ -1672,7 +1672,7 @@ async fn storage_dedupe_quota_and_gc_over_http() {
         Method::PUT,
         &format!("{bk}/b/objects/a.png"),
         su,
-        &[],
+        &[("content-length", "10")],
         png.clone(),
     )
     .await;
@@ -1691,6 +1691,19 @@ async fn storage_dedupe_quota_and_gc_over_http() {
     )
     .await;
     assert_eq!(h["content-type"], "image/png");
+    // Object transfers show in the traffic numbers: a write and a read, with the bytes sent.
+    let st = t
+        .call(Method::GET, "/api/v1/apps/demo/stats", None, true)
+        .await
+        .body;
+    let tot = &st["traffic"]["total"];
+    assert_eq!(
+        (tot["writes"].clone(), tot["reads"].clone()),
+        (json!(1), json!(1)),
+        "{st}"
+    );
+    assert_eq!(tot["bytesIn"], 10, "{st}");
+    assert!(tot["bytesOut"].as_u64().unwrap() >= 10, "{st}");
     // Quota: 10 bytes held, one more byte of a second object does not fit.
     let (s, _, _) = blob(
         &t,
