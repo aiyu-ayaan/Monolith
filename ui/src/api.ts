@@ -314,3 +314,27 @@ export interface Superuser {
 
 /** The signed-in superuser; refetched whenever the token changes. */
 export const [me] = createRoot(() => createResource(token, () => api<Superuser>("GET", "/api/v1/system/me")));
+
+export interface Webhook {
+  id: string;
+  name: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+  created: string;
+  secretHint: string;
+  pending: number;
+  dead: number;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  event: string;
+  seq: number;
+  status: "pending" | "ok" | "dead";
+  attempts: number;
+  nextAttempt: string | null;
+  lastStatus: number | null;
+  lastError: string | null;
+  created: string;
+}

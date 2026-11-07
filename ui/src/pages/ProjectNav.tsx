@@ -41,7 +41,7 @@ const GROUPS: { label: string; items: Item[] }[] = [
   {
     label: "Extend",
     items: [
-      { id: "hooks", label: "Webhooks", icon: "plug" },
+      { id: "hooks", label: "Webhooks", icon: "plug", to: "/webhooks" },
       { id: "plugins", label: "Plugins", icon: "plug" },
     ],
   },

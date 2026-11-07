@@ -131,7 +131,7 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
       relational view rules via the batched SQL check (`docs/07 §5`); benchmark S7; micro-benchmarks for the hub (`CLAUDE.md`: realtime needs them)
 - [ ] Backups follow-ups: schedule + retention (`docs/09` B2), zstd archive, S3 target, WAL shipping, in-place restore,
       `monolith backup` CLI, encryption (B4), a single-file archive that includes the storage, streamed download without buffering in the admin UI
-- [x] Webhooks v1: record events, HMAC signature, retries, delivery log, test ping (`docs/11 §7`)
+- [x] Webhooks v1: record events, HMAC signature, retries, delivery log, test ping (`docs/11 §7`); Admin UI Webhooks page
 - [ ] Webhook follow-ups: auth/backup events, per-hook filter, admin UI delivery detail, cron triggers, benchmark
 - [ ] Sidebar items still marked "Soon": Offline sync (`docs/09` part A), Plugins (`docs/14`; needs a WASM runtime)
 - [ ] Rules follow-ups: `:length` and `:each` modifiers, `~` with a field on the right side, `@request.query.*`, `@request.key.*`
