@@ -61,6 +61,7 @@ tools/         codegen, release scripts, conformance runner
 bench/         load harness, scenarios, results
 docker/        Dockerfile, compose
 development/   design docs (source of truth) and TODO.md
+logo/          brand assets: Keystone M symbol, lockups, favicon/PWA icons (rules in development/docs/23)
 ```
 
 Debuggability is a feature (`development/docs/22`): every API change that adds an error or rule path needs request-id tracing, explain support, and the matching `agent-skills/` update.

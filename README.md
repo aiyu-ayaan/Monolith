@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo/monolith-lockup-dark.svg">
+    <img src="logo/monolith-lockup-light.svg" alt="Monolith" width="360">
+  </picture>
+</p>
+
 # Monolith
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](Cargo.toml)
