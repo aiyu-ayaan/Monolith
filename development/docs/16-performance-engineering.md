@@ -30,8 +30,15 @@ unrealistic; budgets are then revised in this doc with the measured data.
 ### HTTP
 - `axum` on `hyper` 1.x, HTTP/1.1 keep-alive + HTTP/2 (h2c behind proxy, TLS via
   `rustls` when terminating directly).
-- `mimalloc` as global allocator (fewer allocation stalls under multi-thread load;
-  verify against glibc and jemalloc in bench).
+- Allocator: **glibc for now; `mimalloc` on hold** (measured 2026-11-07, i5-10200H,
+  `bench/scenarios/load.py` + `footprint.py`). `mimalloc` 0.1.52 (v3) gave +20% view and
+  list throughput on 4 cores, about +5% on 1 core, but raised idle RSS from 10.5 to 42 MB
+  and from 53 to 138 MB with 20 apps open (over the 150 MB budget below). With
+  `MIMALLOC_ARENA_EAGER_COMMIT=0 MIMALLOC_ALLOW_THP=0 MIMALLOC_PURGE_DELAY=0` it fell to
+  11.3 MB / 46.5 MB at the same speed, but those are runtime env vars (the workspace
+  forbids `unsafe`, so `mi_option_set` is out). The v2 line with `no_thp` stayed at
+  32.8 MB / 64.7 MB. Revisit when the Docker image exists and can set the env vars.
+  jemalloc not yet measured.
 - Avoid per-request `String` allocs: route params as `&str`, `smallvec`/`compact_str`
   for small collections/strings, `bytes::Bytes` for bodies.
 - Body limits enforced while streaming.
@@ -94,7 +101,7 @@ unrealistic; budgets are then revised in this doc with the measured data.
 | Analytics | `duckdb` | SQLite rollups |
 | JSON | `serde`, `sonic-rs` | `simd-json`, `serde_json` |
 | MessagePack | `rmp-serde` | — |
-| Allocator | `mimalloc` | `tikv-jemallocator` |
+| Allocator | glibc (`mimalloc` on hold, §2) | `mimalloc`, `tikv-jemallocator` |
 | Cache | `moka` | `quick_cache` |
 | Concurrent map | `papaya` | `dashmap`, `scc` |
 | Tokens | `jsonwebtoken` or `jwt-simple` (EdDSA) | `pasetors` |

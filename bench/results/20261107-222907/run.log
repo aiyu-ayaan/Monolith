@@ -1,0 +1,42 @@
+22:29:07 server up pid 748375 idle {'rss_mb': 10.88671875, 'anon_mb': 1.75, 'file_mb': 9.13671875, 'threads': 9}
+22:29:34 seeded 1000000 rows in 26.9s = 37152 rows/s (batch 500, authed superuser)
+22:29:34 after seed {'rss_mb': 53.08984375, 'anon_mb': 43.359375, 'file_mb': 9.73046875, 'threads': 17}
+22:29:34 == H0 health (floor)  c=64
+22:29:53    rep1: 123119 units/s  p50 0.42 p99 2.32 max 15.9 ms  cpu 299%  rss 55MB (anon 45, file 10) thr 17  codes {'200': 1847208}
+22:30:09    rep2: 128704 units/s  p50 0.42 p99 1.97 max 8.7 ms  cpu 319%  rss 166MB (anon 45, file 121) thr 17  codes {'200': 1930861}
+22:30:25    rep3: 125791 units/s  p50 0.42 p99 2.15 max 16.6 ms  cpu 317%  rss 166MB (anon 45, file 121) thr 17  codes {'200': 1887174}
+22:30:25 == M1 view by id, public  c=64
+22:30:43    rep1: 69675 units/s  p50 0.82 p99 2.78 max 16.6 ms  cpu 325%  rss 170MB (anon 47, file 122) thr 17  codes {'200': 1045334}
+22:30:59    rep2: 73140 units/s  p50 0.81 p99 2.23 max 9.9 ms  cpu 341%  rss 170MB (anon 47, file 122) thr 17  codes {'200': 1097463}
+22:31:14    rep3: 71286 units/s  p50 0.82 p99 2.38 max 10.3 ms  cpu 334%  rss 170MB (anon 47, file 122) thr 17  codes {'200': 1069600}
+22:31:14 == M2* view, row rule status='open'  c=64
+22:31:32    rep1: 70692 units/s  p50 0.83 p99 2.38 max 15.4 ms  cpu 336%  rss 170MB (anon 47, file 122) thr 17  codes {'200': 1060744}
+22:31:48    rep2: 71219 units/s  p50 0.83 p99 2.31 max 10.3 ms  cpu 339%  rss 170MB (anon 47, file 122) thr 17  codes {'200': 1068610}
+22:32:03    rep3: 71216 units/s  p50 0.83 p99 2.32 max 9.8 ms  cpu 336%  rss 170MB (anon 47, file 122) thr 17  codes {'200': 1068707}
+22:32:03 == M3 list keyset limit=50  c=64
+22:32:22    rep1: 21287 units/s  p50 2.89 p99 5.79 max 23.1 ms  cpu 377%  rss 174MB (anon 51, file 122) thr 17  codes {'200': 319368}
+22:32:37    rep2: 21876 units/s  p50 2.85 p99 5.17 max 12.2 ms  cpu 384%  rss 174MB (anon 51, file 122) thr 17  codes {'200': 328172}
+22:32:52    rep3: 21641 units/s  p50 2.87 p99 5.32 max 18.2 ms  cpu 382%  rss 174MB (anon 51, file 122) thr 17  codes {'200': 324643}
+22:32:52 == M3b list limit=50 filter n>50000  c=64
+22:33:10    rep1: 1640 units/s  p50 38.23 p99 55.12 max 79.0 ms  cpu 398%  rss 222MB (anon 51, file 171) thr 17  codes {'200': 24536}
+22:33:25    rep2: 1667 units/s  p50 37.96 p99 50.26 max 68.9 ms  cpu 399%  rss 223MB (anon 52, file 171) thr 17  codes {'200': 24945}
+22:33:40    rep3: 1611 units/s  p50 38.62 p99 54.67 max 71.8 ms  cpu 397%  rss 223MB (anon 52, file 171) thr 17  codes {'200': 24115}
+22:33:40 == M4 create single (c=64)  c=64
+22:33:58    rep1: 46765 units/s  p50 1.18 p99 3.40 max 54.1 ms  cpu 267%  rss 223MB (anon 52, file 171) thr 17  codes {'201': 701560}
+22:34:14    rep2: 45653 units/s  p50 1.18 p99 3.61 max 86.8 ms  cpu 261%  rss 223MB (anon 52, file 171) thr 17  codes {'201': 684931}
+22:34:29    rep3: 46973 units/s  p50 1.18 p99 3.00 max 56.9 ms  cpu 269%  rss 223MB (anon 52, file 171) thr 17  codes {'201': 704714}
+22:34:29 == M4b create single (c=256)  c=256
+22:34:47    rep1: 50976 units/s  p50 4.67 p99 15.83 max 66.6 ms  cpu 305%  rss 232MB (anon 61, file 171) thr 17  codes {'201': 764647}
+22:35:03    rep2: 51568 units/s  p50 4.67 p99 10.14 max 57.5 ms  cpu 313%  rss 233MB (anon 62, file 171) thr 17  codes {'201': 773653}
+22:35:18    rep3: 51930 units/s  p50 4.60 p99 12.65 max 34.4 ms  cpu 314%  rss 234MB (anon 63, file 171) thr 17  codes {'201': 778995}
+22:35:18 == M5 batch 100 creates (c=16)  c=16
+22:35:36    rep1: 110427 units/s  p50 13.84 p99 44.42 max 48.2 ms  cpu 142%  rss 234MB (anon 63, file 171) thr 17  codes {'200': 16551}
+22:35:51    rep2: 62634 units/s  p50 13.93 p99 878.43 max 1122.7 ms  cpu 82%  rss 234MB (anon 63, file 171) thr 17  codes {'200': 9380}
+22:36:06    rep3: 56769 units/s  p50 13.41 p99 922.47 max 1188.2 ms  cpu 70%  rss 234MB (anon 63, file 171) thr 17  codes {'200': 8500}
+22:36:06 == M1 open-loop @ 35643 qps (50% of max)
+22:36:24    rep1: 35638 rps p50 0.42 p99 1.28 p99.9 2.17 max 26.5 ms
+22:36:39    rep2: 35638 rps p50 0.41 p99 1.31 p99.9 2.60 max 27.9 ms
+22:36:55    rep3: 35639 rps p50 0.42 p99 1.37 p99.9 2.54 max 28.5 ms
+22:36:55 sink rows after run: {'exact': True, 'total': 8476510}
+22:37:30 idle after run {'rss_mb': 1998.2421875, 'anon_mb': 79.26171875, 'file_mb': 1918.98046875, 'threads': 17}
+22:37:30 final {'rss_mb': 1998.2421875, 'anon_mb': 79.26171875, 'file_mb': 1918.98046875, 'threads': 17, 'peak_rss_mb': 1998.2421875, 'data_mb': 1153.293656}

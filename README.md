@@ -156,6 +156,34 @@ erDiagram
 
 Every record table is created `STRICT, WITHOUT ROWID` with a 16-byte UUIDv7 primary key (`id`), microsecond UTC timestamps (`created`, `updated`), a row version (`_v`, equal to the `_changes.seq` of the last mutation and exposed as the HTTP `ETag`), and a Hybrid Logical Clock (`_hlc`). Multi-relations are stored in `_rel_<collection>_<field>` junction tables with forward `(owner, target)` and reverse `(target, owner)` indexes. Full details in [`development/docs/05-data-model-and-storage.md`](development/docs/05-data-model-and-storage.md).
 
+## Performance
+
+Measured on 2026-11-07, release build at the commit that added this section. The machine is an Intel i5-10200H laptop (4 cores / 8 threads) and also ran a desktop and browser, so treat the numbers as a lower bound, not a published benchmark. The test is HTTP over loopback with `oha`, a 1,000,000-row collection, and the median of 3 × 15 s runs. Full logs, raw JSON and caveats: [`bench/results/20261107-222907/SUMMARY.md`](bench/results/20261107-222907/SUMMARY.md).
+
+<p align="center">
+  <img src="bench/results/throughput.svg" alt="Throughput per scenario on 4 cores and 1 core: view by id 71k/s and 36k/s, list 50 rows 21.6k/s and 10.2k/s, single create 46.8k/s and 24k/s" width="760">
+</p>
+
+| Scenario | 4 cores | 1 core | p99 (4 cores) |
+|---|--:|--:|--:|
+| View record by id | 71.3k req/s | 35.8k req/s | 2.38 ms |
+| View with row rule | 71.2k req/s | 36.2k req/s | 2.32 ms |
+| List 50 records (keyset) | 21.6k req/s | 10.2k req/s | 5.32 ms |
+| Create one record | 46.8k req/s | 24.0k req/s | 3.40 ms |
+| Batch of 100 creates | 62.6k rows/s* | 87.4k rows/s | — |
+
+\* The 4-core batch run hit an intermittent ~1 s write stall that is still under investigation. The 1-core run shows the normal rate.
+
+Footprint on one core: **10.8 MB RSS idle**, **55 MB with 20 apps open**, 0% idle CPU, and a 30 ms cold start. One core serves about 36k reads/s and 24k writes/s. Estimate, not yet tested on a real VPS: a 1 vCPU / 512 MB host should be enough for small and medium apps. A database larger than RAM also uses page cache through SQLite `mmap`, which the kernel can reclaim.
+
+Reproduce (ask before running on a shared machine; it saturates the CPUs):
+
+```bash
+pnpm build:release
+pnpm bench:load                 # throughput + latency, writes bench/results/<stamp>/
+pnpm bench:footprint            # idle RSS, threads, cold start with 20 apps
+```
+
 ## Requirements
 
 - Rust `1.99.1` (pinned in [`rust-toolchain.toml`](rust-toolchain.toml)) with `cargo`, `rustfmt`, and `clippy`
@@ -382,6 +410,7 @@ pnpm rust:lint              # cargo fmt --all -- --check && cargo clippy --works
 pnpm typecheck:ui           # tsc --noEmit for the SolidJS admin UI
 pnpm build                  # all JS/TS packages (ui + TypeScript SDK) + Rust debug build
 pnpm rust:bench:build       # compile Criterion micro-benchmarks without running them
+pnpm bench:load             # HTTP load test (see Performance above)
 ```
 
 ## License

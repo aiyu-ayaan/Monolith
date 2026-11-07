@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 542" width="760" height="542" font-family="system-ui,-apple-system,Segoe UI,sans-serif" role="img" aria-label="Monolith throughput by scenario">
+<style>:root{--fg:#111827;--mute:#6b7280;--grid:#e5e7eb;--bg:#ffffff;--a:#D90F23;--b:#6b7280;--c:#111827}@media (prefers-color-scheme:dark){:root{--fg:#e5e7eb;--mute:#9ca3af;--grid:#1f2430;--bg:#0B0D12;--a:#FF4D55;--b:#9ca3af;--c:#e5e7eb}}text{fill:var(--fg)} .m{fill:var(--mute)}</style>
+<rect width="760" height="542" rx="8" fill="var(--bg)"/>
+<text x="250" y="26" font-size="15" font-weight="600">Throughput per scenario (median, higher is better)</text>
+<rect x="250" y="38" width="12" height="12" rx="2" fill="var(--a)"/><text x="268" y="48" font-size="12">4 cores (CPUs 0-3)</text>
+<rect x="406" y="38" width="12" height="12" rx="2" fill="var(--b)"/><text x="424" y="48" font-size="12">1 core (CPU 0)</text>
+<line x1="534" y1="44" x2="546" y2="44" stroke="var(--fg)" stroke-width="2" stroke-dasharray="3 2"/><text x="552" y="48" font-size="12" class="m">doc 17 gate</text>
+<line x1="250.0" y1="64" x2="250.0" y2="512" stroke="var(--grid)"/>
+<text x="250.0" y="528" font-size="11" text-anchor="middle" class="m">0k</text>
+<line x1="318.6" y1="64" x2="318.6" y2="512" stroke="var(--grid)"/>
+<text x="318.6" y="528" font-size="11" text-anchor="middle" class="m">20k</text>
+<line x1="387.1" y1="64" x2="387.1" y2="512" stroke="var(--grid)"/>
+<text x="387.1" y="528" font-size="11" text-anchor="middle" class="m">40k</text>
+<line x1="455.7" y1="64" x2="455.7" y2="512" stroke="var(--grid)"/>
+<text x="455.7" y="528" font-size="11" text-anchor="middle" class="m">60k</text>
+<line x1="524.3" y1="64" x2="524.3" y2="512" stroke="var(--grid)"/>
+<text x="524.3" y="528" font-size="11" text-anchor="middle" class="m">80k</text>
+<line x1="592.9" y1="64" x2="592.9" y2="512" stroke="var(--grid)"/>
+<text x="592.9" y="528" font-size="11" text-anchor="middle" class="m">100k</text>
+<line x1="661.4" y1="64" x2="661.4" y2="512" stroke="var(--grid)"/>
+<text x="661.4" y="528" font-size="11" text-anchor="middle" class="m">120k</text>
+<line x1="730.0" y1="64" x2="730.0" y2="512" stroke="var(--grid)"/>
+<text x="730.0" y="528" font-size="11" text-anchor="middle" class="m">140k</text>
+<text x="240" y="94.0" font-size="12" text-anchor="end">H0 health (floor)</text>
+<rect x="250" y="70" width="431.3" height="16" rx="2" fill="var(--a)"><title>4 cores (CPUs 0-3): 125,791/s</title></rect>
+<text x="686.3" y="82" font-size="11" class="m">125.8k</text>
+<rect x="250" y="90" width="186.7" height="16" rx="2" fill="var(--b)"><title>1 core (CPU 0): 54,453/s</title></rect>
+<text x="441.7" y="102" font-size="11" class="m">54.5k</text>
+<text x="240" y="148.0" font-size="12" text-anchor="end">M1 view by id, public</text>
+<rect x="250" y="124" width="244.4" height="16" rx="2" fill="var(--a)"><title>4 cores (CPUs 0-3): 71,286/s</title></rect>
+<text x="499.4" y="136" font-size="11" class="m">71.3k</text>
+<rect x="250" y="144" width="122.6" height="16" rx="2" fill="var(--b)"><title>1 core (CPU 0): 35,772/s</title></rect>
+<text x="377.6" y="156" font-size="11" class="m">35.8k</text>
+<line x1="455.7" y1="121" x2="455.7" y2="164" stroke="var(--fg)" stroke-width="2" stroke-dasharray="3 2"/>
+<text x="240" y="202.0" font-size="12" text-anchor="end">M2* view, row rule status='open'</text>
+<rect x="250" y="178" width="244.2" height="16" rx="2" fill="var(--a)"><title>4 cores (CPUs 0-3): 71,216/s</title></rect>
+<text x="499.2" y="190" font-size="11" class="m">71.2k</text>
+<rect x="250" y="198" width="124.1" height="16" rx="2" fill="var(--b)"><title>1 core (CPU 0): 36,205/s</title></rect>
+<text x="379.1" y="210" font-size="11" class="m">36.2k</text>
+<line x1="421.4" y1="175" x2="421.4" y2="218" stroke="var(--fg)" stroke-width="2" stroke-dasharray="3 2"/>
+<text x="240" y="256.0" font-size="12" text-anchor="end">M3 list keyset limit=50</text>
+<rect x="250" y="232" width="74.2" height="16" rx="2" fill="var(--a)"><title>4 cores (CPUs 0-3): 21,641/s</title></rect>
+<text x="329.2" y="244" font-size="11" class="m">21.6k</text>
+<rect x="250" y="252" width="34.9" height="16" rx="2" fill="var(--b)"><title>1 core (CPU 0): 10,179/s</title></rect>
+<text x="289.9" y="264" font-size="11" class="m">10.2k</text>
+<line x1="301.4" y1="229" x2="301.4" y2="272" stroke="var(--fg)" stroke-width="2" stroke-dasharray="3 2"/>
+<text x="240" y="310.0" font-size="12" text-anchor="end">M3b list limit=50 filter n>50000</text>
+<rect x="250" y="286" width="5.6" height="16" rx="2" fill="var(--a)"><title>4 cores (CPUs 0-3): 1,640/s</title></rect>
+<text x="260.6" y="298" font-size="11" class="m">1.6k</text>
+<rect x="250" y="306" width="1.5" height="16" rx="2" fill="var(--b)"><title>1 core (CPU 0): 448/s</title></rect>
+<text x="256.5" y="318" font-size="11" class="m">0.4k</text>
+<text x="240" y="364.0" font-size="12" text-anchor="end">M4 create single (c=64)</text>
+<rect x="250" y="340" width="160.3" height="16" rx="2" fill="var(--a)"><title>4 cores (CPUs 0-3): 46,765/s</title></rect>
+<text x="415.3" y="352" font-size="11" class="m">46.8k</text>
+<rect x="250" y="360" width="82.2" height="16" rx="2" fill="var(--b)"><title>1 core (CPU 0): 23,965/s</title></rect>
+<text x="337.2" y="372" font-size="11" class="m">24.0k</text>
+<line x1="318.6" y1="337" x2="318.6" y2="380" stroke="var(--fg)" stroke-width="2" stroke-dasharray="3 2"/>
+<text x="240" y="418.0" font-size="12" text-anchor="end">M4b create single (c=256)</text>
+<rect x="250" y="394" width="176.8" height="16" rx="2" fill="var(--a)"><title>4 cores (CPUs 0-3): 51,568/s</title></rect>
+<text x="431.8" y="406" font-size="11" class="m">51.6k</text>
+<rect x="250" y="414" width="80.9" height="16" rx="2" fill="var(--b)"><title>1 core (CPU 0): 23,608/s</title></rect>
+<text x="335.9" y="426" font-size="11" class="m">23.6k</text>
+<text x="240" y="472.0" font-size="12" text-anchor="end">M5 batch 100 creates (c=16)</text>
+<rect x="250" y="448" width="214.7" height="16" rx="2" fill="var(--a)"><title>4 cores (CPUs 0-3): 62,634 rows/s</title></rect>
+<text x="469.7" y="460" font-size="11" class="m">62.6k</text>
+<rect x="250" y="468" width="299.6" height="16" rx="2" fill="var(--b)"><title>1 core (CPU 0): 87,370 rows/s</title></rect>
+<text x="554.6" y="480" font-size="11" class="m">87.4k</text>
+<line x1="592.9" y1="445" x2="592.9" y2="488" stroke="var(--fg)" stroke-width="2" stroke-dasharray="3 2"/>
+</svg>
