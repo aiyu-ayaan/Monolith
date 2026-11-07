@@ -12,6 +12,7 @@ import Records from "./pages/Records";
 import Auth from "./pages/Auth";
 import Logs from "./pages/Logs";
 import Rules from "./pages/Rules";
+import Realtime from "./pages/Realtime";
 import "./styles.css";
 
 function Shell(props: RouteSectionProps) {
@@ -60,6 +61,7 @@ render(
             <Route path="/auth" component={Auth} />
             <Route path="/logs" component={Logs} />
             <Route path="/rules" component={Rules} />
+            <Route path="/realtime" component={Realtime} />
             <Route path="/c/:coll" component={Records} />
           </Route>
         </Route>

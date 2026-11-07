@@ -1841,3 +1841,34 @@ button.badge {
 .wide-search {
   max-width: 420px;
 }
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.badge.badge-warn {
+  color: var(--warn, #d29922);
+  border-color: currentColor;
+}
+
+.badge.badge-bad {
+  color: var(--danger);
+  border-color: currentColor;
+}
+
+pre.json {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  font: 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}

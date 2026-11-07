@@ -193,6 +193,7 @@ export interface AppStats {
   dbBytes: number;
   walBytes: number;
   collections: { name: string; records: number | null; reads: number; creates: number; updates: number; deletes: number }[];
+  realtime: { connections: number; events: number; dropped: number };
 }
 
 export interface RequestLog {
