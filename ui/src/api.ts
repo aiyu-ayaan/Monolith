@@ -205,3 +205,43 @@ export interface RequestLog {
   superuser: boolean;
   error?: string | null;
 }
+
+// ---------- per-app auth config (GET/PUT /api/v1/apps/{app}/auth/config) ----------
+
+export interface EmailPasswordConfig {
+  enabled: boolean;
+  allowSignup: boolean;
+  minPasswordLength: number;
+}
+
+export interface AuthProviderDef {
+  id: string;
+  name: string;
+  fields: string[];
+  required: string[];
+}
+
+export interface AuthProvider {
+  id: string;
+  name: string;
+  enabled: boolean;
+  clientId: string;
+  clientSecretSet: boolean;
+  extra: Record<string, string>;
+  callbackPath: string;
+}
+
+export interface AuthConfig {
+  emailPassword: EmailPasswordConfig;
+  providers: AuthProvider[];
+  catalog: AuthProviderDef[];
+}
+
+export interface AuthProviderInput {
+  id: string;
+  enabled: boolean;
+  clientId: string;
+  /** Omit to keep the stored secret. */
+  clientSecret?: string;
+  extra: Record<string, string>;
+}

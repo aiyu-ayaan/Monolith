@@ -39,6 +39,11 @@ Check this list before relying on a feature; the rest of this page is the target
   64-hex string in the setup link the server prints at start-up (ask the operator for it;
   restart for a new one). 401 = wrong/expired/spent token or a superuser already exists.
   Headless: the operator runs `monolith superuser create <email>` on the host/container.
+- Per-app sign-in config (superuser): `GET|PUT /api/v1/apps/{app}/auth/config` holds email/password
+  settings and any number of OAuth providers (`google github apple microsoft facebook discord gitlab x
+  linkedin twitch oidc`). `clientSecret` is write-only: omit it to keep the stored one, `""` clears it;
+  responses only show `clientSecretSet`. Enabling a provider needs client id, secret and its required
+  `extra` fields (Apple `teamId`+`keyId`, OIDC `issuer`). Config only: the sign-in flow is Phase 2.
 - Not yet: user tokens, API keys, `openapi.json`, 429 rate limits.
 - Status codes: create rule rejects → 403; update/delete rule rejects or record missing → 404;
   rule `null` → 403 for non-superusers; unique/FK violation → 409; stale `If-Match` → 412;

@@ -1474,3 +1474,181 @@ a.link:hover {
   border-color: color-mix(in srgb, var(--danger) 35%, transparent);
 }
 
+
+/* ---------- dashboards + authentication ---------- */
+
+.create-bar.inline {
+  max-width: none;
+}
+
+.btn.sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  gap: 5px;
+}
+
+.btn.danger {
+  color: var(--danger);
+}
+
+.app-card.rich {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.app-card.rich .app-link {
+  padding-right: 14px;
+}
+
+.app-stats {
+  margin: 0;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  border-top: 1px solid var(--border);
+}
+
+.app-stats dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.app-stats dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+}
+
+.app-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.app-actions .icon-btn {
+  margin-right: 0;
+}
+
+.rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+}
+
+.rows li + li {
+  border-top: 1px solid var(--border);
+}
+
+.row-link,
+.row-static {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 4px;
+  min-width: 0;
+}
+
+.row-link:hover {
+  background: var(--hover);
+}
+
+.empty.slim {
+  padding: 16px 0;
+  justify-items: center;
+}
+
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: 6px;
+  background: var(--hover);
+  border: 1px solid var(--border);
+  font-weight: 650;
+  font-size: 12px;
+}
+
+.prov {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.badge.on {
+  color: var(--ok, #3fb950);
+  border-color: currentColor;
+}
+
+button.badge {
+  background: none;
+  cursor: pointer;
+}
+
+.picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r);
+}
+
+.picker-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.picker-item:hover {
+  border-color: var(--border-strong);
+  background: var(--hover);
+}
+
+.truncate-cell {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notice {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.notice .icon {
+  flex: none;
+  margin-top: 2px;
+}

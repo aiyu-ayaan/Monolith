@@ -100,6 +100,10 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] `fields` projection pushed into list SQL (system cols + sort keys kept for cursors; `expand` keeps full columns)
 - [x] Precompressed admin UI assets: `tools/precompress.mjs` writes `.br` (q11) + `.gz` after `vite build`; server picks by
       `Accept-Encoding`, serves embedded bytes zero-copy (JS 98 KB raw → 29 KB br)
+- [x] Per-app Authentication (Firebase-style): `GET|PUT /api/v1/apps/{app}/auth/config` (email/password + 11 OAuth/OIDC providers,
+      write-only secrets, stored in system.db), Admin UI Authentication page (provider list, add/edit/remove, redirect URI)
+- [x] Admin UI dashboards: landing = server tiles + per-app cards + traffic charts; project overview = tiles, collections, sign-in status, charts
+- [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Remaining Phase 1 follow-ups: superuser TOTP + token revocation, docs/api/rest.md + rules.md,
       TanStack virtual grid + CodeMirror rule editor, `json` fields as JSONB
 - [x] Ported PocketBase rules vectors (`api/conformance/vectors/rules.json`, run by `crates/monolith-core/tests/rules_vectors.rs`);
