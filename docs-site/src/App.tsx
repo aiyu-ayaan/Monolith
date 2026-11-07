@@ -4,6 +4,7 @@ import { AREAS, firstPage, navFor, pageFor, PAGES, type AreaId } from "./lib/con
 import { applyTheme, setTheme, theme } from "./lib/prefs";
 import PageView from "./components/PageView";
 import Search from "./components/Search";
+import Home from "./components/Home";
 
 function Header(p: { onSearch: () => void; onMenu: () => void }) {
   const loc = useLocation();
@@ -88,29 +89,6 @@ function SideNav(p: { area: AreaId; open: boolean; onClose: () => void }) {
         </For>
       </nav>
     </>
-  );
-}
-
-function Home() {
-  return (
-    <main class="home">
-      <h1>Monolith documentation</h1>
-      <p class="lead">Build your backend on one container: database with access rules, authentication, realtime, files, webhooks and plugins.</p>
-      <div class="cards">
-        <For each={AREAS}>
-          {(a) => {
-            const pages = () => PAGES.filter((p) => p.area === a.id);
-            return (
-              <A class="card" href={`/${firstPage(a.id)?.path ?? a.id}`}>
-                <h2>{a.title}</h2>
-                <p>{{ "get-started": "What Monolith is, the concepts, and your first app in a few minutes.", build: "Database, authentication, storage, extending the server and running it.", sdks: "Client libraries for web, Android, Flutter, Python and Rust.", reference: "Exact APIs, protocols, limits and configuration." }[a.id]}</p>
-                <small>{pages().length} pages</small>
-              </A>
-            );
-          }}
-        </For>
-      </div>
-    </main>
   );
 }
 
