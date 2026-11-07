@@ -2,7 +2,7 @@
 title: Analytics
 description: Python: send events from your app.
 group: Python
-order: 70
+order: 80
 ---
 
 Send events from your app.

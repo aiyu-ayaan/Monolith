@@ -5,39 +5,79 @@ group: Kotlin and Android
 order: 30
 ---
 
-Sign up, sign in, providers and session state.
+Sign users in and out, watch the session and call the API as them.
 
-`mono.auth` is an `AppAuth` for the app's end users.
-
-| Member | Returns | Notes |
-|---|---|---|
-| `signUp(email, password, name = null)` | `AppUser` | Creates the account and signs in |
-| `signIn(email, password)` | `AppUser` | |
-| `signInWithProvider(id, redirectUri = null)` | `String` | Returns the URL to open, and launches it if a `browserLauncher` is set |
-| `handleRedirect(uri)` / `handleRedirectAsync(uri)` | `RedirectResult` / `Job` | Call with the URI your redirect activity receives |
-| `signOut()` | | Revokes the refresh token |
-| `updateProfile(name)` | `AppUser` | |
-| `changePassword(old, new)` | | The server ends all sessions |
-| `accessToken()` | `String?` | Refreshes first if needed |
-| `providers(forceRefresh = false)` | `PublicAuth` | Enabled sign-in methods |
-| `state` | `StateFlow<AuthState>` | `Unknown`, `SignedOut`, `SignedIn(user)` |
-| `user` | `AppUser?` | Current user |
-| `redirecting`, `redirectFailures` | `StateFlow<Boolean>`, `SharedFlow` | Provider flow status and errors |
+## Sign up and sign in
 
 ```kotlin
 val user = mono.auth.signUp("ada@example.com", "correct horse", name = "Ada")
+val user2 = mono.auth.signIn("ada@example.com", "correct horse")
+```
+
+Both are `suspend` and return `AppUser` (`id`, `email`, `name`, `created`, `disabled`, `lastLogin`, `providers`, and `displayName`).
+
+## Watch the signed-in state
+
+```kotlin
 mono.auth.state.collect { s ->
     when (s) {
-        AuthState.Unknown -> showSplash()
+        AuthState.Unknown -> showSplash()          // the stored session is still being restored
         AuthState.SignedOut -> showLogin()
-        is AuthState.SignedIn -> showHome(s.user.displayName)
+        is AuthState.SignedIn -> showHome(s.user)
     }
 }
 ```
 
-`mono.auth("_superusers")` returns an `AuthService` for the system login (`signInWithPassword`, `token`, `setToken`, `signOut`).
+`state` is a `StateFlow`, so `collectAsState()` works in Compose. `mono.auth.user` is the current user or `null`.
+
+## Sign in with a provider
+
+```kotlin
+val providers = mono.auth.providers().providers        // [AuthProviderInfo(id = "google", name = "Google"), ...]
+mono.auth.signInWithProvider("google")                 // opens a Custom Tab on Android
+```
+
+Declare `MonolithAuthRedirectActivity` with the scheme `monolith-<app>` in the manifest, and add `monolith-<app>://auth` to the app's allowed redirect URLs. The activity hands the returned URI to `mono.auth.handleRedirect(uri)`. Failures arrive on `mono.auth.redirectFailures`, and `mono.auth.redirecting` is `true` while a sign-in is open.
+
+## Profile and password
+
+```kotlin
+mono.auth.updateProfile("Ada L.")
+mono.auth.changePassword("correct horse", "battery staple")   // the server ends all sessions
+```
+
+## Get the token for your own requests
+
+```kotlin
+val token = mono.auth.accessToken()   // refreshes first if needed
+```
+
+## Sign out
+
+```kotlin
+mono.auth.signOut()   // clears the local session, then revokes the refresh token
+```
+
+## Where the session is kept
+
+`Monolith.init(context, ...)` uses `EncryptedSessionStorage` (private preferences if the Keystore fails). On the JVM it is memory unless you pass a `SessionStorage`.
+
+## Errors
+
+| Status | Meaning |
+|---|---|
+| 401 | Wrong email or password, or an expired session |
+| 403 | Sign-up is closed for this app |
+| 409 | The email is already registered |
+| 400 | Validation failed, for example a password shorter than the app's minimum (default 8) |
+
+## Sessions
+
+An access token lasts 15 minutes and a refresh token 30 days. The SDK refreshes shortly before expiry and once after a `401`, one refresh at a time. A rejected refresh token signs the user out. Details: [Sessions and tokens](/build/auth/sessions-and-tokens).
+
+Which sign-in methods exist is configured per app in the Admin UI under **Authentication**: [Authentication overview](/build/auth/overview), [Providers](/build/auth/providers).
 
 ## Next steps
 
-- [Database](/sdks/kotlin/database)
+- [Read and query](/sdks/kotlin/query)
 - [SDKs overview](/sdks/overview)

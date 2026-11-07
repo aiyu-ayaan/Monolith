@@ -1,27 +1,54 @@
 ---
 title: Realtime
-description: Kotlin and Android: live queries and change events.
+description: Kotlin and Android: live queries, single-record listeners and change events.
 group: Kotlin and Android
-order: 50
+order: 60
 ---
 
-Live queries and change events.
+Keep a screen current with live queries and change events.
 
-| Method | Returns |
-|---|---|
-| `subscribe(listener, filter, ids)` | Unsubscribe `() -> Unit` |
-| `subscribe(filter, ids)` / `subscribeFlow(...)` | `Flow<RealtimeEvent<T>>` |
-| `onSnapshot(callback, SnapshotOptions)` | Unsubscribe `() -> Unit` |
-| `onSnapshot(SnapshotOptions)` | `Flow<QuerySnapshot<T>>` |
-| `onDocSnapshot(id, callback, onError)` | Unsubscribe `() -> Unit` |
-| `onDocSnapshot(id)` | `Flow<T?>` (`null` once deleted or hidden) |
-
-`RealtimeEvent(action, record, collection, seq)`: `action` is `create`, `update`, `delete` or `leave` (the record stopped matching your filter). `QuerySnapshot(docs, changes)`: `changes` are `DocumentChange(type = ADDED | MODIFIED | REMOVED, doc)`. `SnapshotOptions(filter, sort, limit = 100, onError)`.
+## Listen to a query
 
 ```kotlin
-tasks.onSnapshot(SnapshotOptions(filter = "done = false", sort = "-created"))
-    .collect { snap -> adapter.submit(snap.docs) }
+// As a Flow (recommended on Android)
+tasks.onSnapshot(SnapshotOptions(filter = "done = false", sort = "-created", limit = 50))
+    .collect { snap ->
+        adapter.submitList(snap.docs)
+        snap.changes.forEach { println("${it.type} ${it.doc.id}") }   // ADDED | MODIFIED | REMOVED
+    }
+
+// As a callback
+val stop = tasks.onSnapshot({ snap -> render(snap.docs) }, SnapshotOptions(filter = "done = false"))
+stop()
 ```
+
+Collect the Flow with `repeatOnLifecycle(Lifecycle.State.STARTED)` so the stream closes when the screen is hidden. Server errors go to `SnapshotOptions.onError`.
+
+## Listen to one record
+
+```kotlin
+tasks.onDocSnapshot(id).collect { task ->
+    if (task == null) showDeleted() else render(task)   // null: deleted or no longer visible
+}
+```
+
+## Raw change events
+
+```kotlin
+tasks.subscribe(filter = "done = false").collect { e ->
+    println("${e.action} ${e.record.id} seq=${e.seq}")   // create | update | delete | leave
+}
+```
+
+`leave` means the record stopped matching your filter or rule. It was not deleted.
+
+## Behavior
+
+- The SDK reconnects with backoff and resumes from the last sequence number.
+- Rules apply: you only receive rows your view rule allows.
+- `SnapshotOptions.limit` defaults to 100, server cap 1000.
+
+Limits (connections, replay window, queue size): [Realtime](/build/database/realtime).
 
 ## Next steps
 

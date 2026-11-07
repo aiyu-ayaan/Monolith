@@ -1,26 +1,58 @@
 ---
 title: Realtime
-description: Rust: live queries and change events.
+description: Rust: live queries, single-record listeners and change events.
 group: Rust
-order: 50
+order: 60
 ---
 
-Live queries and change events.
+Keep a screen current with live queries and change events.
 
-| Method | Item |
-|---|---|
-| `subscribe(SubscribeOptions::new().filter(..).ids(..))` | `Result<RealtimeEvent<T>>` (`action`, `record`, `collection`, `seq`) |
-| `on_snapshot(SnapshotOptions::new().filter(..).sort(..).limit(..))` | `Result<QuerySnapshot>` (`docs`, `changes`) |
-| `on_doc_snapshot(id)` | `Result<Option<Record>>` |
+Realtime methods return a `Subscription`, which is both a `Stream` and has `recv().await`. Dropping it closes the connection.
 
-`on_snapshot` and `on_doc_snapshot` exist on `Collection<Record>`. The return value is a `Subscription`: call `recv().await`, or use it as a `Stream`. Dropping it closes the connection.
+## Listen to a query
 
 ```rust
-let mut sub = mono.records("tasks").on_snapshot(SnapshotOptions::new().filter("done = false"));
+use monolith_client::SnapshotOptions;
+
+let mut sub = mono.records("tasks")
+    .on_snapshot(SnapshotOptions::new().filter("done = false").sort("-created").limit(50));
 while let Some(snap) = sub.recv().await {
-    println!("{} docs", snap?.docs.len());
+    let snap = snap?;
+    println!("{} docs, {} changes", snap.docs.len(), snap.changes.len());
 }
 ```
+
+`snap.changes` hold `ChangeType::Added`, `Modified` or `Removed`. The first snapshot reports every document as `Added`.
+
+## Listen to one record
+
+```rust
+let mut sub = mono.records("tasks").on_doc_snapshot(&id);
+while let Some(doc) = sub.recv().await {
+    match doc? { Some(r) => render(r), None => show_deleted() }   // None: deleted or no longer visible
+}
+```
+
+## Raw change events
+
+```rust
+use monolith_client::SubscribeOptions;
+let mut sub = mono.collection::<Task>("tasks").subscribe(SubscribeOptions::new().filter("done = false"));
+while let Some(ev) = sub.recv().await {
+    let ev = ev?;
+    println!("{:?} seq={:?}", ev.action, ev.seq);   // Create | Update | Delete | Leave
+}
+```
+
+`Leave` means the record stopped matching your filter or rule. It was not deleted.
+
+## Behavior
+
+- Reconnect backoff is set on the builder with `realtime_backoff(base, max)`.
+- Rules apply: you only receive rows your view rule allows.
+- `on_snapshot` and `on_doc_snapshot` exist on `Collection<Record>` only.
+
+Limits (connections, replay window, queue size): [Realtime](/build/database/realtime).
 
 ## Next steps
 

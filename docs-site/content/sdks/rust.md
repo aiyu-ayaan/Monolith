@@ -2,7 +2,7 @@
 title: Guide
 description: Async client on tokio and reqwest.
 group: Rust
-order: 10
+order: 14
 ---
 
 ```rust

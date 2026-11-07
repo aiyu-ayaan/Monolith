@@ -2,7 +2,7 @@
 title: Errors
 description: Python: error types and what they carry.
 group: Python
-order: 90
+order: 100
 ---
 
 Error types and what they carry.

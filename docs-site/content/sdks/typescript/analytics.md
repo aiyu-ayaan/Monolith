@@ -2,7 +2,7 @@
 title: Analytics
 description: TypeScript: send events from your app.
 group: TypeScript
-order: 70
+order: 80
 ---
 
 Send events from your app.

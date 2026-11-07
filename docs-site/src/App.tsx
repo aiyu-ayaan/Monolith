@@ -44,6 +44,15 @@ function Header(p: { onSearch: () => void; onMenu: () => void }) {
 function SideNav(p: { area: AreaId; open: boolean; onClose: () => void }) {
   const loc = useLocation();
   const groups = createMemo(() => navFor(p.area));
+  const hasCurrent = (g: { pages: { path: string }[] }) => g.pages.some((pg) => loc.pathname === `/${pg.path}`);
+  // Only the group of the current page starts open; the reader can open or close any group.
+  const [opened, setOpened] = createSignal<Record<string, boolean>>({});
+  createEffect(() => {
+    const cur = groups().find(hasCurrent);
+    if (cur?.title) setOpened((o) => (o[cur.title!] === undefined ? { ...o, [cur.title!]: true } : o));
+  });
+  const isOpen = (g: { title: string | null; pages: { path: string }[] }) => (g.title ? (opened()[g.title] ?? hasCurrent(g)) : true);
+  const toggle = (t: string, now: boolean) => setOpened((o) => ({ ...o, [t]: !now }));
   return (
     <>
       <Show when={p.open}>
@@ -52,21 +61,28 @@ function SideNav(p: { area: AreaId; open: boolean; onClose: () => void }) {
       <nav class="side" classList={{ open: p.open }} aria-label="Documentation">
         <For each={groups()}>
           {(g) => (
-            <section>
+            <section classList={{ collapsed: !!g.title && !isOpen(g) }}>
               <Show when={g.title}>
-                <h2>{g.title}</h2>
+                <button type="button" class="group-head" aria-expanded={isOpen(g)} onClick={() => toggle(g.title!, isOpen(g))}>
+                  <span>{g.title}</span>
+                  <svg class="chev" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+                    <path d="M5 8l5 5 5-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
               </Show>
-              <ul>
-                <For each={g.pages}>
-                  {(pg) => (
-                    <li>
-                      <A href={`/${pg.path}`} classList={{ on: loc.pathname === `/${pg.path}` }} aria-current={loc.pathname === `/${pg.path}` ? "page" : undefined} onClick={p.onClose}>
-                        {pg.title}
-                      </A>
-                    </li>
-                  )}
-                </For>
-              </ul>
+              <Show when={isOpen(g)}>
+                <ul>
+                  <For each={g.pages}>
+                    {(pg) => (
+                      <li>
+                        <A href={`/${pg.path}`} classList={{ on: loc.pathname === `/${pg.path}` }} aria-current={loc.pathname === `/${pg.path}` ? "page" : undefined} onClick={p.onClose}>
+                          {pg.title}
+                        </A>
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
             </section>
           )}
         </For>

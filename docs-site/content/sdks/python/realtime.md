@@ -1,23 +1,51 @@
 ---
 title: Realtime
-description: Python: live queries and change events.
+description: Python: live queries, single-record listeners and change events.
 group: Python
-order: 50
+order: 60
 ---
 
-Live queries and change events.
+Keep a screen current with live queries and change events.
 
-| Method | Callback gets | Returns |
-|---|---|---|
-| `subscribe(listener, filter=, ids=)` | `RealtimeEvent(action, record, collection, seq)` | unsubscribe |
-| `on_snapshot(callback, filter=, sort=, limit=, on_error=)` | `QuerySnapshot(docs, changes)` | unsubscribe |
-| `on_doc_snapshot(id, callback, on_error=)` | record or `None` | unsubscribe |
+Callbacks run on a background thread. Keep them short and thread-safe.
 
-`action` is `create`, `update`, `delete` or `leave`. `DocumentChange.type` is `"added"`, `"modified"` or `"removed"`. Call `mono.close()` to stop all streams.
+## Listen to a query
 
 ```python
-stop = tasks.on_snapshot(lambda snap: print(len(snap.docs)), filter="done = false")
+def on_snap(snap):
+    print(len(snap.docs), "docs")
+    for c in snap.changes:
+        print(c.type, c.doc["id"])      # added | modified | removed
+
+stop = tasks.on_snapshot(on_snap, filter="done = false", sort="-created", limit=50,
+                         on_error=lambda e: print("realtime error", e))
+# later
+stop()
 ```
+
+## Listen to one record
+
+```python
+stop = tasks.on_doc_snapshot(record_id, lambda doc: print("gone" if doc is None else doc["title"]))
+```
+
+`None` means the record was deleted or is no longer visible to you.
+
+## Raw change events
+
+```python
+stop = tasks.subscribe(lambda e: print(e.action, e.record["id"], e.seq), filter="done = false")
+```
+
+`action` is `create`, `update`, `delete` or `leave`. `leave` means the record stopped matching your filter or rule. It was not deleted.
+
+## Behavior
+
+- Without `filter` or `ids`, subscriptions share one connection; a filter opens its own.
+- Rules apply: you only receive rows your view rule allows.
+- Call `mono.close()` to stop every stream before the process exits.
+
+Limits (connections, replay window, queue size): [Realtime](/build/database/realtime).
 
 ## Next steps
 

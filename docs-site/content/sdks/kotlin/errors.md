@@ -2,7 +2,7 @@
 title: Errors
 description: Kotlin and Android: error types and what they carry.
 group: Kotlin and Android
-order: 90
+order: 100
 ---
 
 Error types and what they carry.

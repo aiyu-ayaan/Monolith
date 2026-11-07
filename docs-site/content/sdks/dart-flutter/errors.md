@@ -2,7 +2,7 @@
 title: Errors
 description: Dart and Flutter: error types and what they carry.
 group: Dart and Flutter
-order: 90
+order: 100
 ---
 
 Error types and what they carry.

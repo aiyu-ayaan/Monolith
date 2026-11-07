@@ -2,7 +2,7 @@
 title: Errors
 description: TypeScript: error types and what they carry.
 group: TypeScript
-order: 90
+order: 100
 ---
 
 Error types and what they carry.

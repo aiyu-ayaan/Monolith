@@ -91,8 +91,13 @@ kbd { font: 12px var(--mono); border: 1px solid var(--line); border-bottom-width
 /* shell */
 .shell { display: grid; grid-template-columns: var(--side) minmax(0, 1fr); max-width: 1500px; margin: 0 auto; }
 .side { position: sticky; top: var(--header); align-self: start; height: calc(100vh - var(--header)); overflow-y: auto; padding: 24px 16px 40px 20px; border-right: 1px solid var(--line); font-size: 14.5px; }
-.side section { margin-bottom: 22px; }
-.side h2 { margin: 0 0 6px; padding: 0 10px; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.side section { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.side section:last-child { border-bottom: 0; }
+.side .group-head { display: flex; align-items: center; justify-content: space-between; width: 100%; padding: 10px 10px; border: 0; background: none; border-radius: 8px; font: inherit; font-weight: 600; color: var(--ink); cursor: pointer; text-align: left; }
+.side .group-head:hover { background: var(--bg-alt); }
+.side .chev { flex: none; color: var(--ink-3); transition: transform .15s; }
+.side section.collapsed .chev { transform: rotate(-90deg); }
+.side ul { padding-bottom: 6px; }
 .side ul { list-style: none; margin: 0; padding: 0; }
 .side a { display: block; padding: 6px 10px; border-radius: 8px; color: var(--ink-2); }
 .side a:hover { background: var(--bg-alt); color: var(--ink); text-decoration: none; }

@@ -2,7 +2,7 @@
 title: Analytics
 description: Kotlin and Android: send events from your app.
 group: Kotlin and Android
-order: 70
+order: 80
 ---
 
 Send events from your app.

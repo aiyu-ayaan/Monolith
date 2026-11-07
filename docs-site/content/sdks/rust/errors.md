@@ -2,7 +2,7 @@
 title: Errors
 description: Rust: error types and what they carry.
 group: Rust
-order: 90
+order: 100
 ---
 
 Error types and what they carry.

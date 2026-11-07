@@ -5,34 +5,79 @@ group: Dart and Flutter
 order: 30
 ---
 
-Sign up, sign in, providers and session state.
+Sign users in and out, watch the session and call the API as them.
 
-`mono.auth()` is the app-user service.
+## Sign up and sign in
 
-| Method | Returns | Notes |
-|---|---|---|
-| `signUp(email, password, {name})` | `Future<AppUser>` | Creates and signs in |
-| `signIn(email, password)` | `Future<AppUser>` | |
-| `signInWithProvider(id, {redirectUri})` | `Future<Uri>` | The URL to open (also passed to `urlLauncher`) |
-| `handleRedirect(uri)` | `Future<AppUser?>` | Call with the incoming deep link |
-| `signOut()` | `Future<void>` | |
-| `updateProfile({name})` | `Future<AppUser>` | |
-| `changePassword(old, new)` | `Future<void>` | |
-| `accessToken()` | `Future<String?>` | Refreshes first if needed |
-| `providers({force})` | `Future<PublicAuth>` | |
-| `changes` | `Stream<AuthState>` | `AuthUnknown`, `AuthSignedOut`, `AuthSignedIn` |
-| `redirectErrors` | `Stream<MonolithException>` | |
+```dart
+final user = await mono.auth().signUp('ada@example.com', 'correct horse', name: 'Ada');
+final user2 = await mono.auth().signIn('ada@example.com', 'correct horse');
+```
+
+Both return `AppUser` (`id`, `email`, `name`, `created`, `disabled`, `lastLogin`, `providers`).
+
+## Watch the signed-in state
 
 ```dart
 mono.auth().changes.listen((s) {
-  if (s is AuthSignedIn) print(s.user?.email);
+  switch (s) {
+    case AuthUnknown(): showSplash();      // the stored session is still being restored
+    case AuthSignedOut(): showLogin();
+    case AuthSignedIn(:final user): showHome(user);
+  }
 });
-await mono.auth().signIn('ada@example.com', 'correct horse');
 ```
 
-`mono.auth('_superusers')` is the system login (`signInWithPassword`, `onChange`, `signOut`).
+With `monolith_flutter`, `AuthGate` and `AuthBuilder` do this for you.
+
+## Sign in with a provider
+
+```dart
+final providers = (await mono.auth().providers()).providers;
+await mono.auth().signInWithProvider('google');   // builds the URL and passes it to urlLauncher
+```
+
+Register the scheme `monolith-<app>` (or your own `redirectUri`) for deep links and add it to the app's allowed redirect URLs. Pass the incoming link to `mono.auth().handleRedirect(uri)`; `monolith_flutter` does this for you. Failures arrive on `redirectErrors`.
+
+## Profile and password
+
+```dart
+await mono.auth().updateProfile(name: 'Ada L.');
+await mono.auth().changePassword('correct horse', 'battery staple');   // the server ends all sessions
+```
+
+## Get the token for your own requests
+
+```dart
+final token = await mono.auth().accessToken();   // refreshes first if needed
+```
+
+## Sign out
+
+```dart
+await mono.auth().signOut();
+```
+
+## Where the session is kept
+
+Memory in `monolith_client`. `MonolithFlutter.init` uses secure storage. Pass your own `SessionStorage` to change it.
+
+## Errors
+
+| Status | Meaning |
+|---|---|
+| 401 | Wrong email or password, or an expired session |
+| 403 | Sign-up is closed for this app |
+| 409 | The email is already registered |
+| 400 | Validation failed, for example a password shorter than the app's minimum (default 8) |
+
+## Sessions
+
+An access token lasts 15 minutes and a refresh token 30 days. The SDK refreshes shortly before expiry and once after a `401`, one refresh at a time. A rejected refresh token signs the user out. Details: [Sessions and tokens](/build/auth/sessions-and-tokens).
+
+Which sign-in methods exist is configured per app in the Admin UI under **Authentication**: [Authentication overview](/build/auth/overview), [Providers](/build/auth/providers).
 
 ## Next steps
 
-- [Database](/sdks/dart-flutter/database)
+- [Read and query](/sdks/dart-flutter/query)
 - [SDKs overview](/sdks/overview)
