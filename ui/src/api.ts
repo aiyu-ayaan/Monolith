@@ -247,6 +247,16 @@ export interface AuthProviderInput {
   extra: Record<string, string>;
 }
 
+export interface ApiKey {
+  id: string;
+  app: string;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  created: string;
+  expires: string | null;
+}
+
 export interface Backup {
   name: string;
   bytes: number;
