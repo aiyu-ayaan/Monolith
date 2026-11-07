@@ -21,7 +21,7 @@ export default function Storage() {
   const [extra, setExtra] = createSignal<StorageObject[]>([]);
   const [cursor, setCursor] = createSignal<string | null>(null);
   const [creating, setCreating] = createSignal(false);
-  const [f, setF] = createSignal({ name: "", public: false, maxMb: "100", quotaMb: "", mime: "" });
+  const [f, setF] = createSignal({ name: "", public: false, maxMb: "100", quotaMb: "", mime: "", thumbs: "" });
 
   const q = () => (selected() ? { b: selected()!, p: prefix() } : null);
   const [page, { refetch: refetchObjects }] = createResource(q, async (k) => {
@@ -69,6 +69,7 @@ export default function Storage() {
         maxSize: Math.round(Number(v.maxMb) * 1024 * 1024),
         ...(v.quotaMb ? { maxBytes: Math.round(Number(v.quotaMb) * 1024 * 1024) } : {}),
         allowedMime: v.mime.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean),
+        thumbSizes: v.thumbs.split(",").map((s) => s.trim()).filter(Boolean),
       });
       setCreating(false);
       setSelected(v.name);
@@ -132,7 +133,7 @@ export default function Storage() {
           <h1>Storage</h1>
           <p class="muted">Buckets of files for this app. Upload with <code>PUT {base()}/&lt;bucket&gt;/objects/&lt;key&gt;</code> and a superuser token or an API key with <code>files:write</code>.</p>
         </div>
-        <button class="btn" onClick={() => { setF({ name: "", public: false, maxMb: "100", quotaMb: "", mime: "" }); setError(null); setCreating(true); }}>
+        <button class="btn" onClick={() => { setF({ name: "", public: false, maxMb: "100", quotaMb: "", mime: "", thumbs: "" }); setError(null); setCreating(true); }}>
           <Icon name="storage" />
           New bucket
         </button>
@@ -141,7 +142,7 @@ export default function Storage() {
       <p class="notice">
         <Icon name="alert" size={16} />
         <span>
-          Local disk only. Identical files are stored once. Public buckets let anyone who knows a key read it; listing and writes always need a credential. Per-user access rules, thumbnails and S3 are planned, and files are not part of backups yet.
+          Local disk only. Identical files are stored once, and image thumbnails of the sizes you declare are made on demand. Public buckets let anyone who knows a key read it; listing and writes always need a credential. Per-user access rules and S3 are planned.
         </span>
       </p>
       <div class="table-wrap">
@@ -273,6 +274,11 @@ export default function Storage() {
             <label for="bmime">Allowed types</label>
             <input id="bmime" class="mono" placeholder="image/*, application/pdf" value={f().mime} onInput={(e) => setF({ ...f(), mime: e.currentTarget.value })} />
             <span class="help">Comma separated. Leave empty to allow every type. The type is detected from the file contents when it can be, so a renamed file is judged by what it really is.</span>
+          </div>
+          <div class="field">
+            <label for="bthumbs">Thumbnail sizes</label>
+            <input id="bthumbs" class="mono" placeholder="100x100, 0x300, 400x400f" value={f().thumbs} onInput={(e) => setF({ ...f(), thumbs: e.currentTarget.value })} />
+            <span class="help">Request one with <code>?thumb=100x100</code> on a png, jpeg, gif or webp object. <code>WxH</code> crops to fill, <code>Wx0</code> / <code>0xH</code> keep the aspect ratio, <code>WxHf</code> fits inside. Only listed sizes are made. Leave empty for none.</span>
           </div>
           <div class="field">
             <label>

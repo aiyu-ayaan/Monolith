@@ -70,6 +70,13 @@ Firebase-Storage style buckets, not yet the record-field files of §2–§5.
 - **Orphans:** `gc` deletes blob files no row references (older than 10 minutes) and reports referenced blobs whose file
   is missing. It runs once in the background when an app's storage is first opened and on `POST .../storage:gc`.
   `files/.tmp` is emptied at open.
+- **Thumbnails (§5):** `GET .../objects/{key}?thumb=100x100` for png, jpeg, gif and webp objects. Sizes are declared per
+  bucket (`thumbSizes`, up to 16, sides up to 4096) and anything else is a 400, so a client cannot ask for arbitrary work.
+  The source header is read first and images over 50 megapixels are refused (413) before any pixel is decoded; decoding has an
+  allocation cap. Resizing uses `fast_image_resize` (Lanczos3, SIMD); `WxH` crops to fill, `Wx0`/`0xH` keep the aspect ratio,
+  `WxHf` fits inside without enlarging. Output is JPEG q82, or PNG when the source has transparency. Jobs run on a pool of
+  `cores/2` (one pool for the server), one job per thumbnail however many requests wait, and the result is cached at
+  `files/thumbs/<hash>/<size>.jpg|png` (ETag `<hash>-<size>`), so later requests are plain file reads. They are deleted with the blob.
 - Access: private bucket needs a superuser token or a key with `files:read[:bucket]`; public buckets are readable
   by key without credentials but never listable; writes need `files:write[:bucket]`. Keys cannot manage buckets.
 - Traffic: object GET/HEAD count as reads and PUT/DELETE as writes in the per-app traffic metrics, with `Content-Length` as the
@@ -79,7 +86,9 @@ Firebase-Storage style buckets, not yet the record-field files of §2–§5.
 - Control-plane and file-metadata writes use `Mutation.coll = NO_CHANGE_LOG` (`monolith-store`): same commit, but no `_changes`
   row, no `seq`, no bus event, so `files.db` and `system.db` do not grow a change log.
 - Data written by the first storage layout (`<bucket>/<id>` files, no counters) is migrated when the app's storage opens.
-- **Deviations from §2–§4:** local disk only; no thumbnails yet; no `_files` table (records have no file fields yet).
+- **Deviations from §2–§5:** local disk only; WebP/AVIF output is not produced (JPEG/PNG only); no eager generation at upload; thumbnails
+  are not counted in quotas; a failed decode is not cached, so a broken image costs CPU on every request (bounded by the pool); no `_files`
+  table (records have no file fields yet).
 - Backups include storage (`docs/09`): `files.db` snapshot plus hard links to the blobs.
 - Not yet: S3 backend and presigned URLs, per-user/rule-based access (needs end-user auth), file fields on records,
   per-app total quota, benchmarks (upload/download throughput and memory are unmeasured).

@@ -9,7 +9,10 @@
 //! the first bytes. Bucket config is mirrored in memory, so the upload path reads no config from the
 //! DB; usage counters are updated in the same commit as the object row.
 //!
-//! Limits: local disk only, no thumbnails yet, metadata commits are serialized per app.
+//! Image thumbnails of declared sizes are made on demand on a bounded pool and cached beside the
+//! blob (`thumbs/<hash>/<size>.jpg|png`); they go away with the blob.
+//!
+//! Limits: local disk only, metadata commits are serialized per app.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -29,11 +32,13 @@ use crate::codec::format_us;
 use crate::error::{CoreError, CoreResult, FieldError};
 use crate::schema::valid_name;
 use crate::system::{Registry, ensure_columns, sys_delete, sys_write};
+use crate::thumbs::{self, Spec};
 
 pub const DEFAULT_MAX_SIZE: u64 = 100 << 20;
 pub const MAX_OBJECT_SIZE: u64 = 10 << 30;
 pub const MAX_KEY: usize = 512;
 const MAX_MIME_RULES: usize = 32;
+const MAX_THUMB_SIZES: usize = 16;
 const MAX_LIST: usize = 1000;
 /// Bytes of an upload kept to sniff its type.
 const SNIFF_BYTES: usize = 8192;
@@ -56,7 +61,8 @@ CREATE TABLE IF NOT EXISTS blobs (
 ";
 
 /// Columns added after the first layout: `(name, declaration)`.
-const BUCKET_COLUMNS: [(&str, &str); 3] = [
+const BUCKET_COLUMNS: [(&str, &str); 4] = [
+    ("thumbs", "TEXT"),
     ("max_bytes", "INTEGER"),
     ("objects", "INTEGER NOT NULL DEFAULT 0"),
     ("bytes", "INTEGER NOT NULL DEFAULT 0"),
@@ -77,6 +83,10 @@ pub struct BucketIn {
     /// Total bytes the bucket may hold (logical size, before dedupe); omit for no limit.
     #[serde(default)]
     pub max_bytes: Option<u64>,
+    /// Thumbnail sizes clients may request with `?thumb=`: `100x100` (crop), `0x300` / `300x0`
+    /// (keep aspect), `400x400f` (fit inside). Only these are generated.
+    #[serde(default)]
+    pub thumb_sizes: Vec<String>,
 }
 
 /// A bucket's config as held in memory.
@@ -87,6 +97,7 @@ pub struct Bucket {
     pub max_size: u64,
     pub allowed_mime: Vec<String>,
     pub max_bytes: Option<u64>,
+    pub thumb_sizes: Vec<String>,
     pub created_us: i64,
 }
 
@@ -98,6 +109,7 @@ pub struct BucketInfo {
     pub max_size: u64,
     pub allowed_mime: Vec<String>,
     pub max_bytes: Option<u64>,
+    pub thumb_sizes: Vec<String>,
     pub created: String,
     pub objects: u64,
     pub bytes: u64,
@@ -185,6 +197,19 @@ fn validate_bucket(b: &BucketIn) -> CoreResult<()> {
             format!("1 to {MAX_OBJECT_SIZE} bytes"),
         ));
     }
+    if b.thumb_sizes.len() > MAX_THUMB_SIZES
+        || b.thumb_sizes.iter().any(|t| Spec::parse(t).is_none())
+        || b.thumb_sizes.iter().collect::<HashSet<_>>().len() != b.thumb_sizes.len()
+    {
+        return Err(invalid(
+            "thumbSizes",
+            "invalid_format",
+            format!(
+                "up to {MAX_THUMB_SIZES} distinct sizes like 100x100, 0x300 or 400x400f (sides up to {})",
+                thumbs::MAX_SIDE
+            ),
+        ));
+    }
     if b.max_bytes == Some(0) {
         return Err(invalid("maxBytes", "out_of_range", "at least 1 byte"));
     }
@@ -241,6 +266,10 @@ pub struct Files {
     /// Serializes metadata commits (read old object, write, release blobs) so counters and
     /// reference counts never race. Held for a few statements, never during byte transfer.
     commit: tokio::sync::Mutex<()>,
+    /// Bounds concurrent thumbnail jobs across all apps.
+    thumb_pool: Arc<tokio::sync::Semaphore>,
+    /// One lock per thumbnail being made, so concurrent requests for it share one job.
+    thumb_flight: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// A streaming upload being written to a temp file. Feed it from a blocking thread.
@@ -337,6 +366,8 @@ pub struct GcReport {
     pub removed_bytes: u64,
     /// Blobs the database references but whose file is gone (data loss; reported, not repaired).
     pub missing_files: u64,
+    /// Thumbnail directories of blobs that no longer exist.
+    pub removed_thumb_dirs: u64,
 }
 
 fn mutation(sql: &str, params: Vec<Value>) -> Mutation {
@@ -389,7 +420,7 @@ fn valid_hash(h: &str) -> bool {
 }
 
 impl Files {
-    async fn open(dir: PathBuf) -> CoreResult<Files> {
+    async fn open(dir: PathBuf, thumb_pool: Arc<tokio::sync::Semaphore>) -> CoreResult<Files> {
         let d = dir.clone();
         let store = tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(d.join(".tmp")).map_err(io)?;
@@ -415,7 +446,8 @@ impl Files {
         let added = ensure_columns(&store, "buckets", &BUCKET_COLUMNS).await?;
         let rows = store
             .query(Query {
-                sql: "SELECT name, public, max_size, mime, created, max_bytes FROM buckets".into(),
+                sql: "SELECT name, public, max_size, mime, created, max_bytes, thumbs FROM buckets"
+                    .into(),
                 params: vec![],
             })
             .await?;
@@ -432,6 +464,7 @@ impl Files {
                         Value::Int(i) => Some((*i).max(0) as u64),
                         _ => None,
                     },
+                    thumb_sizes: serde_json::from_str(&text(&r[6])).unwrap_or_default(),
                 };
                 (b.name.clone(), Arc::new(b))
             })
@@ -441,6 +474,8 @@ impl Files {
             store,
             buckets: RwLock::new(buckets),
             commit: tokio::sync::Mutex::new(()),
+            thumb_pool,
+            thumb_flight: std::sync::Mutex::new(HashMap::new()),
         };
         f.migrate_legacy(added).await?;
         Ok(f)
@@ -562,6 +597,7 @@ impl Files {
             max_size: b.max_size,
             allowed_mime: b.allowed_mime.clone(),
             max_bytes: b.max_bytes,
+            thumb_sizes: b.thumb_sizes.clone(),
             created: format_us(b.created_us),
             objects,
             bytes,
@@ -640,15 +676,19 @@ impl Files {
             max_size: input.max_size.unwrap_or(DEFAULT_MAX_SIZE),
             allowed_mime: input.allowed_mime,
             max_bytes: input.max_bytes,
+            thumb_sizes: input.thumb_sizes,
             created_us: old.as_ref().map_or_else(now_us, |o| o.created_us),
         };
         let mime = serde_json::to_string(&b.allowed_mime)
             .map_err(|e| CoreError::Internal(e.to_string()))?;
+        let sizes = serde_json::to_string(&b.thumb_sizes)
+            .map_err(|e| CoreError::Internal(e.to_string()))?;
         self.store
             .write(sys_write(
-                "INSERT INTO buckets (name, public, max_size, mime, created, max_bytes) \
-                 VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET public = excluded.public, \
-                 max_size = excluded.max_size, mime = excluded.mime, max_bytes = excluded.max_bytes",
+                "INSERT INTO buckets (name, public, max_size, mime, created, max_bytes, thumbs) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(name) DO UPDATE SET public = excluded.public, \
+                 max_size = excluded.max_size, mime = excluded.mime, max_bytes = excluded.max_bytes, \
+                 thumbs = excluded.thumbs",
                 new_id(),
                 vec![
                     Value::Text(b.name.as_str().into()),
@@ -657,6 +697,7 @@ impl Files {
                     Value::Text(mime.into()),
                     Value::Int(b.created_us),
                     b.max_bytes.map_or(Value::Null, |m| Value::Int(m as i64)),
+                    Value::Text(sizes.into()),
                 ],
             ))
             .await?;
@@ -741,13 +782,17 @@ impl Files {
                     .collect(),
             ))
             .await?;
-        let paths: Vec<PathBuf> = hashes
+        let valid: Vec<&String> = hashes.iter().filter(|h| valid_hash(h)).collect();
+        let paths: Vec<PathBuf> = valid.iter().map(|h| self.blob_path(h)).collect();
+        let thumb_dirs: Vec<PathBuf> = valid
             .iter()
-            .filter(|h| valid_hash(h))
-            .map(|h| self.blob_path(h))
+            .map(|h| self.dir.join("thumbs").join(h))
             .collect();
         tokio::task::spawn_blocking(move || {
-            paths.iter().for_each(|p| drop(std::fs::remove_file(p)))
+            paths.iter().for_each(|p| drop(std::fs::remove_file(p)));
+            thumb_dirs
+                .iter()
+                .for_each(|d| drop(std::fs::remove_dir_all(d)));
         })
         .await
         .map_err(join)
@@ -930,6 +975,105 @@ impl Files {
         Ok((info, f))
     }
 
+    /// A cached or freshly made thumbnail of an image object, as `(info, file)`. The info is the
+    /// thumbnail's: its size and type, and an ETag of `<blob hash>-<size>`. Only sizes the bucket
+    /// declares are made, at most `cores/2` at a time server-wide, and one job per thumbnail however
+    /// many requests wait for it.
+    pub async fn thumbnail(
+        &self,
+        bucket: &str,
+        key: &str,
+        spec: &str,
+    ) -> CoreResult<(ObjectInfo, File)> {
+        let b = self.bucket(bucket)?;
+        let sp = Spec::parse(spec)
+            .filter(|_| b.thumb_sizes.iter().any(|t| t == spec))
+            .ok_or_else(|| {
+                CoreError::BadRequest(format!(
+                    "thumbnail size '{spec}' is not enabled for bucket '{bucket}' (enabled: {})",
+                    b.thumb_sizes.join(", ")
+                ))
+            })?;
+        let mut info = self.find(bucket, key).await?;
+        if !thumbs::supported(&info.mime) || !valid_hash(&info.etag) {
+            return Err(CoreError::BadRequest(
+                "thumbnails are made for png, jpeg, gif and webp images".into(),
+            ));
+        }
+        let dir = self.dir.join("thumbs").join(&info.etag);
+        let spec_owned = spec.to_owned();
+        let open_cached = |dir: PathBuf| {
+            let spec = spec_owned.clone();
+            async move {
+                tokio::task::spawn_blocking(move || {
+                    [("jpg", "image/jpeg"), ("png", "image/png")]
+                        .into_iter()
+                        .find_map(|(ext, mime)| {
+                            File::open(dir.join(format!("{spec}.{ext}")))
+                                .ok()
+                                .map(|f| (f, mime))
+                        })
+                })
+                .await
+                .map_err(join)
+            }
+        };
+        let mut found = open_cached(dir.clone()).await?;
+        if found.is_none() {
+            let flight_key = format!("{}/{spec}", info.etag);
+            let lock = self
+                .thumb_flight
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entry(flight_key.clone())
+                .or_default()
+                .clone();
+            let _g = lock.lock().await;
+            found = open_cached(dir.clone()).await?;
+            if found.is_none() {
+                let _permit = self
+                    .thumb_pool
+                    .acquire()
+                    .await
+                    .map_err(|e| CoreError::Internal(e.to_string()))?;
+                let (src, tmp) = (
+                    self.blob_path(&info.etag),
+                    self.dir.join(".tmp").join(encode_string(&new_id())),
+                );
+                let (d, spec_s) = (dir.clone(), spec.to_owned());
+                let made =
+                    tokio::task::spawn_blocking(move || -> CoreResult<(File, &'static str)> {
+                        if !src.exists() {
+                            return Err(CoreError::NotFound("object"));
+                        }
+                        let mime = thumbs::make(&src, sp, &tmp)
+                            .inspect_err(|_| drop(std::fs::remove_file(&tmp)))?;
+                        let ext = if mime == "image/png" { "png" } else { "jpg" };
+                        std::fs::create_dir_all(&d).map_err(io)?;
+                        std::fs::rename(&tmp, d.join(format!("{spec_s}.{ext}"))).map_err(io)?;
+                        Ok((
+                            File::open(d.join(format!("{spec_s}.{ext}"))).map_err(io)?,
+                            mime,
+                        ))
+                    })
+                    .await
+                    .map_err(join)?;
+                let mut g = self.thumb_flight.lock().unwrap_or_else(|e| e.into_inner());
+                if Arc::strong_count(&lock) <= 2 {
+                    g.remove(&flight_key);
+                }
+                drop(g);
+                found = Some(made?);
+            }
+        }
+        let (file, mime) = found.ok_or(CoreError::NotFound("object"))?;
+        let len = file.metadata().map_err(io)?.len();
+        info.size = len;
+        info.mime = mime.to_owned();
+        info.etag = format!("{}-{spec}", info.etag);
+        Ok((info, file))
+    }
+
     pub async fn delete_object(&self, bucket: &str, key: &str) -> CoreResult<()> {
         self.bucket(bucket)?;
         let _g = self.commit.lock().await;
@@ -988,6 +1132,46 @@ impl Files {
             items[limit - 1].key.clone()
         });
         Ok(ObjectPage { items, next_cursor })
+    }
+
+    /// Removes thumbnail directories whose blob is gone (a crash between the blob delete and the
+    /// thumbnail delete). Returns how many.
+    async fn gc_thumbs(&self) -> CoreResult<u64> {
+        let root = self.dir.join("thumbs");
+        let names: Vec<(String, PathBuf)> = tokio::task::spawn_blocking(move || {
+            let Ok(rd) = std::fs::read_dir(root) else {
+                return Vec::new();
+            };
+            rd.flatten()
+                .filter(|e| {
+                    e.metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok()?.elapsed().ok())
+                        .is_some_and(|a| a > GC_GRACE)
+                })
+                .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
+                .collect()
+        })
+        .await
+        .map_err(join)?;
+        let mut n = 0;
+        for (hash, path) in names {
+            let rows = self
+                .store
+                .query(Query {
+                    sql: "SELECT 1 FROM blobs WHERE hash = ?".into(),
+                    params: vec![Value::Text(hash.as_str().into())],
+                })
+                .await?;
+            if rows.is_empty()
+                && tokio::task::spawn_blocking(move || std::fs::remove_dir_all(path).is_ok())
+                    .await
+                    .map_err(join)?
+            {
+                n += 1;
+            }
+        }
+        Ok(n)
     }
 
     /// Writes a consistent copy of the storage into `dest` (`files.db` plus `blobs/`). Blobs are
@@ -1079,6 +1263,7 @@ impl Files {
             rep.removed_bytes += bytes;
             rep.missing_files += known.difference(&present).count() as u64;
         }
+        rep.removed_thumb_dirs = self.gc_thumbs().await?;
         Ok(rep)
     }
 }
@@ -1104,7 +1289,8 @@ impl Registry {
             return Ok(f.clone());
         }
         self.app_info(app).await?;
-        let f = Arc::new(Files::open(self.app_dir(app).join("files")).await?);
+        let f =
+            Arc::new(Files::open(self.app_dir(app).join("files"), self.thumb_pool.clone()).await?);
         self.files
             .write()
             .unwrap_or_else(|e| e.into_inner())

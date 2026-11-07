@@ -56,6 +56,8 @@ pub struct Registry {
     install: tokio::sync::Mutex<Option<(String, i64)>>,
     /// Storage of apps that used it since start.
     pub(crate) files: RwLock<HashMap<String, Arc<crate::files::Files>>>,
+    /// Bounds concurrent thumbnail jobs (half the cores, at least one).
+    pub(crate) thumb_pool: Arc<tokio::sync::Semaphore>,
     /// Live API keys by SHA-256 of the secret; verification never touches the DB (doc 08 §2).
     pub(crate) keys: RwLock<HashMap<[u8; 32], Arc<crate::apikeys::ApiKey>>>,
     /// All HTTP traffic plus every app's record ops (in memory, since start).
@@ -172,6 +174,9 @@ impl Registry {
             dir: dir.to_owned(),
             keys: RwLock::new(keys),
             files: RwLock::new(HashMap::new()),
+            thumb_pool: Arc::new(tokio::sync::Semaphore::new(
+                (std::thread::available_parallelism().map_or(2, |n| n.get()) / 2).max(1),
+            )),
             sys,
             apps: RwLock::new(HashMap::new()),
             open_lock: tokio::sync::Mutex::new(()),

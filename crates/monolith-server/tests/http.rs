@@ -1744,3 +1744,81 @@ async fn storage_dedupe_quota_and_gc_over_http() {
         (StatusCode::OK, json!(0), json!(0))
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn storage_thumbnails_over_http() {
+    let t = T::new().await;
+    t.call(
+        Method::POST,
+        "/api/v1/system/apps",
+        Some(json!({"name":"demo"})),
+        true,
+    )
+    .await;
+    let bk = "/api/v1/apps/demo/buckets";
+    t.call(
+        Method::POST,
+        bk,
+        Some(json!({"name":"pics","public":true,"thumbSizes":["32x32"]})),
+        true,
+    )
+    .await;
+    let su = Some(t.token.as_str());
+    let mut img = Vec::new();
+    {
+        use image::ImageEncoder;
+        let px: Vec<u8> = (0..64 * 48 * 3).map(|i| (i % 253) as u8).collect();
+        image::codecs::png::PngEncoder::new(&mut img)
+            .write_image(&px, 64, 48, image::ExtendedColorType::Rgb8)
+            .unwrap();
+    }
+    let url = format!("{bk}/pics/objects/a.png");
+    assert_eq!(
+        blob(&t, Method::PUT, &url, su, &[], img.clone()).await.0,
+        StatusCode::CREATED
+    );
+
+    // Public bucket: anyone may fetch a declared size; the ETag is per size and revalidates.
+    let (s, h, b) = blob(
+        &t,
+        Method::GET,
+        &format!("{url}?thumb=32x32"),
+        None,
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(
+        (s, h["content-type"].to_str().unwrap()),
+        (StatusCode::OK, "image/jpeg")
+    );
+    assert!(b.starts_with(&[0xff, 0xd8]) && b.len() < img.len());
+    let etag = h["etag"].to_str().unwrap().to_owned();
+    assert!(etag.ends_with("-32x32\""));
+    let (s, _, _) = blob(
+        &t,
+        Method::GET,
+        &format!("{url}?thumb=32x32"),
+        None,
+        &[("if-none-match", &etag)],
+        vec![],
+    )
+    .await;
+    assert_eq!(s, StatusCode::NOT_MODIFIED);
+    // Other sizes are refused (no arbitrary work), and the original is untouched.
+    let (s, _, _) = blob(
+        &t,
+        Method::GET,
+        &format!("{url}?thumb=33x33"),
+        None,
+        &[],
+        vec![],
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let (s, h, b) = blob(&t, Method::GET, &url, None, &[], vec![]).await;
+    assert_eq!(
+        (s, b == img, h["content-type"].to_str().unwrap()),
+        (StatusCode::OK, true, "image/png")
+    );
+}

@@ -461,3 +461,158 @@ async fn backups_carry_storage_and_restore_it() {
     reg.delete_backup("s", &b.name).await.unwrap();
     assert!(!bdir.exists());
 }
+
+fn png(w: u32, h: u32, alpha: bool) -> Vec<u8> {
+    use image::ImageEncoder;
+    let mut out = Vec::new();
+    let enc = image::codecs::png::PngEncoder::new(&mut out);
+    if alpha {
+        enc.write_image(
+            &vec![200u8; (w * h * 4) as usize],
+            w,
+            h,
+            image::ExtendedColorType::Rgba8,
+        )
+        .unwrap();
+    } else {
+        let px: Vec<u8> = (0..w * h * 3).map(|i| (i % 251) as u8).collect();
+        enc.write_image(&px, w, h, image::ExtendedColorType::Rgb8)
+            .unwrap();
+    }
+    out
+}
+
+fn dims(f: std::fs::File) -> (u32, u32) {
+    image::ImageReader::new(std::io::BufReader::new(f))
+        .with_guessed_format()
+        .unwrap()
+        .into_dimensions()
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn thumbnails_are_declared_cached_and_cleaned_up() {
+    let (dir, _reg, f) = setup().await;
+    assert!(matches!(
+        f.put_bucket(
+            bucket_with(serde_json::json!({"name":"x","thumbSizes":["9999x1"]})),
+            true
+        )
+        .await,
+        Err(CoreError::Validation(_))
+    ));
+    f.put_bucket(
+        bucket_with(serde_json::json!({"name":"img","thumbSizes":["50x50","100x0","80x80f"]})),
+        true,
+    )
+    .await
+    .unwrap();
+    put(&f, "img", "photo.png", "image/png", &png(200, 100, false))
+        .await
+        .unwrap();
+    put(&f, "img", "logo.png", "image/png", &png(64, 64, true))
+        .await
+        .unwrap();
+    put(&f, "img", "note.txt", "text/plain", b"hello")
+        .await
+        .unwrap();
+
+    // Crop to fill, keep aspect, fit inside; opaque sources become JPEG.
+    let (i, file) = f.thumbnail("img", "photo.png", "50x50").await.unwrap();
+    assert_eq!((dims(file), i.mime.as_str()), ((50, 50), "image/jpeg"));
+    assert!(i.etag.ends_with("-50x50") && i.size > 0);
+    assert_eq!(
+        dims(f.thumbnail("img", "photo.png", "100x0").await.unwrap().1),
+        (100, 50)
+    );
+    assert_eq!(
+        dims(f.thumbnail("img", "photo.png", "80x80f").await.unwrap().1),
+        (80, 40)
+    );
+    // Transparency is kept (PNG out).
+    let (i, file) = f.thumbnail("img", "logo.png", "50x50").await.unwrap();
+    assert_eq!((dims(file), i.mime.as_str()), ((50, 50), "image/png"));
+
+    // Only declared sizes, only images.
+    assert!(matches!(
+        f.thumbnail("img", "photo.png", "60x60").await,
+        Err(CoreError::BadRequest(_))
+    ));
+    assert!(matches!(
+        f.thumbnail("img", "note.txt", "50x50").await,
+        Err(CoreError::BadRequest(_))
+    ));
+    assert!(matches!(
+        f.thumbnail("img", "missing.png", "50x50").await,
+        Err(CoreError::NotFound(_))
+    ));
+
+    // Many requests for a new size share one job and one cached file.
+    let hash = blake3::hash(&png(200, 100, false)).to_hex().to_string();
+    let tdir = dir.path().join("apps/s/files/thumbs").join(&hash);
+    std::fs::remove_file(tdir.join("50x50.jpg")).unwrap();
+    let all = futures_all((0..8).map(|_| {
+        let f = f.clone();
+        async move {
+            f.thumbnail("img", "photo.png", "50x50")
+                .await
+                .map(|(i, _)| i.etag)
+        }
+    }))
+    .await;
+    assert!(
+        all.iter()
+            .all(|r| r.as_ref().unwrap() == &format!("{hash}-50x50"))
+    );
+    assert_eq!(
+        std::fs::read_dir(&tdir).unwrap().count(),
+        3,
+        "50x50.jpg, 100x0.jpg, 80x80f.jpg"
+    );
+    assert_eq!(
+        std::fs::read_dir(dir.path().join("apps/s/files/.tmp"))
+            .unwrap()
+            .count(),
+        0
+    );
+
+    // Thumbnails disappear with the last reference to the blob.
+    f.delete_object("img", "photo.png").await.unwrap();
+    assert!(!tdir.exists());
+
+    // Oversized sources are refused before decoding.
+    let big = png_gray(8000, 6251);
+    put(&f, "img", "big.png", "image/png", &big).await.unwrap();
+    assert!(matches!(
+        f.thumbnail("img", "big.png", "50x50").await,
+        Err(CoreError::TooLarge(_))
+    ));
+}
+
+fn png_gray(w: u32, h: u32) -> Vec<u8> {
+    use image::ImageEncoder;
+    let mut out = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut out)
+        .write_image(
+            &vec![0u8; (w * h) as usize],
+            w,
+            h,
+            image::ExtendedColorType::L8,
+        )
+        .unwrap();
+    out
+}
+
+async fn futures_all<T, F: std::future::Future<Output = T> + Send + 'static>(
+    it: impl Iterator<Item = F>,
+) -> Vec<T>
+where
+    T: Send + 'static,
+{
+    let hs: Vec<_> = it.map(tokio::spawn).collect();
+    let mut out = Vec::new();
+    for h in hs {
+        out.push(h.await.unwrap());
+    }
+    out
+}

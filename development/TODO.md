@@ -113,8 +113,10 @@ Next: remaining Phase 1 follow-ups below, then the exit gates.
 - [x] Storage internals: BLAKE3 content addressing + dedupe, reference counts, bucket quota, usage counters, orphan GC,
       MIME sniffing, migration of the first layout (`docs/13 §6`)
 - [ ] Key/storage hardening (from the known limitations): per-app quota, conformance vectors + MCP tools + SDK methods + `docs/api/rest.md` for both features
+- [x] Thumbnails (declared sizes, on demand, cached, bounded pool) (`docs/13 §6`)
+- [ ] Thumbnail follow-ups: WebP/AVIF output by `Accept`, eager generation at upload, cache negative results, include thumbnails in quotas, resize benchmark
 - [x] Files in backups (hard-linked blobs + `files.db` snapshot, restored into the new app)
-- [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, thumbnails, upload/download benchmark
+- [ ] Storage follow-ups: S3 backend + presigned URLs, rule-based/per-user access, file fields on records, upload/download benchmark
 - [ ] Phase 2 auth on top of that config: users (list/create/disable), password login + user tokens, OAuth code exchange per provider
 - [ ] Realtime follow-ups: capture the old/new row in the writer (store crate) so events and deletes carry the true row;
       `since` replay from `_changes`; WebSocket + channels; filtered and per-record topics; `fields`/`expand`; `leave` events;
@@ -161,7 +163,7 @@ API keys
 
 Storage
 - Local disk only. Backups include storage as hard links on the same disk (not a disaster-recovery copy; the download endpoint serves the
-  database file only). No per-user access, thumbnails or S3.
+  database file only). No per-user access or S3.
 - Dedupe is per app (never across apps), and only by whole-file hash: no chunk-level dedupe.
 - The reference counts can drift if the database is edited by hand or restored from a copy; `gc` fixes orphan files but does not
   recompute counts. Upload/download are not benchmarked.

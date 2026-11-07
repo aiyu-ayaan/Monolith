@@ -1550,12 +1550,17 @@ async fn get_object(
     headers: HeaderMap,
     method: axum::http::Method,
     Path((app, bucket, key)): Path<(String, String, String)>,
+    Query(q): Query<HashMap<String, String>>,
 ) -> ApiResult<Response> {
     let files = reg.files(&app).await?;
     if !files.bucket(&bucket)?.public {
         caller(&reg, &headers, &app)?.require("files:read", &bucket)?;
     }
-    let (info, file) = files.open_object(&bucket, &key).await?;
+    // `?thumb=100x100`: a cached or on-demand thumbnail of an image, in one of the bucket's sizes.
+    let (info, file) = match q.get("thumb") {
+        Some(spec) => files.thumbnail(&bucket, &key, spec).await?,
+        None => files.open_object(&bucket, &key).await?,
+    };
     let etag = format!("\"{}\"", info.etag);
     let cache = |res: &mut Response, public: bool| {
         let h = res.headers_mut();

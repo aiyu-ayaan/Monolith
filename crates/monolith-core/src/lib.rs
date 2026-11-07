@@ -14,6 +14,7 @@ pub mod metrics;
 pub mod realtime;
 pub mod schema;
 pub mod system;
+pub mod thumbs;
 
 pub use apikeys::{ApiKey, ApiKeyIn, ApiKeyInfo};
 pub use app::{

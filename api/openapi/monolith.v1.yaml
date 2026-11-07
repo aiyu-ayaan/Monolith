@@ -967,6 +967,7 @@ paths:
                 type: object
                 properties:
                   removedFiles: { type: integer }
+                  removedThumbDirs: { type: integer }
                   removedBytes: { type: integer }
                   missingFiles: { type: integer }
         "401": { $ref: "#/components/responses/Problem" }
@@ -1089,6 +1090,11 @@ paths:
         schema: { type: string }
     get:
       operationId: getObject
+      parameters:
+        - name: thumb
+          in: query
+          description: "A size from the bucket's `thumbSizes`; returns a JPEG (PNG when the source has transparency) thumbnail of a png, jpeg, gif or webp object, made on demand and cached. 400 for other sizes or non-images, 413 for sources over 50 megapixels."
+          schema: { type: string, example: "100x100" }
       description: |
         Streams the object. Anonymous in a public bucket, otherwise a superuser token or a key with
         `files:read`. Supports `ETag`/`If-None-Match` and a single `Range`. Served with `nosniff` and
@@ -1429,6 +1435,7 @@ components:
         maxSize: { type: integer, minimum: 1, maximum: 10737418240, default: 104857600, description: Bytes per object }
         allowedMime: { type: array, maxItems: 32, items: { type: string }, description: "e.g. image/png, image/*; empty allows all. Checked against the type detected from the content when there is one, else the declared type." }
         maxBytes: { type: integer, minimum: 1, description: "Total bytes the bucket may hold, counted per object before dedupe (413 when exceeded). Omit for no limit." }
+        thumbSizes: { type: array, maxItems: 16, items: { type: string, example: "100x100" }, description: "Sizes `?thumb=` may request: WxH crops to fill, Wx0 / 0xH keep the aspect ratio, WxHf fits inside (sides up to 4096). Only these are generated." }
 
     Bucket:
       type: object
@@ -1439,6 +1446,7 @@ components:
         maxSize: { type: integer }
         allowedMime: { type: array, items: { type: string } }
         maxBytes: { type: [integer, "null"] }
+        thumbSizes: { type: array, items: { type: string } }
         created: { type: string, format: date-time }
         objects: { type: integer }
         bytes: { type: integer }

@@ -268,6 +268,7 @@ export interface Bucket {
   maxSize: number;
   allowedMime: string[];
   maxBytes: number | null;
+  thumbSizes: string[];
   created: string;
   objects: number;
   bytes: number;
